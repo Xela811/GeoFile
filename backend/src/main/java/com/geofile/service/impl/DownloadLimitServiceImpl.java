@@ -1,7 +1,7 @@
 package com.geofile.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.pojo.DownloadLimit;
+import com.geofile.entity.DownloadLimit;
 import com.geofile.service.DownloadLimitService;
 import com.geofile.mapper.DownloadLimitMapper;
 import org.springframework.stereotype.Service;

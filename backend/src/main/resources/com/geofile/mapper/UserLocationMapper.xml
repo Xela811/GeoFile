@@ -4,7 +4,7 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.geofile.mapper.UserLocationMapper">
 
-    <resultMap id="BaseResultMap" type="com.geofile.pojo.UserLocation">
+    <resultMap id="BaseResultMap" type="com.geofile.entity.UserLocation">
             <id property="id" column="id" />
             <result property="userId" column="user_id" />
             <result property="lat" column="lat" />

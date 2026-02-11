@@ -1,6 +1,6 @@
 package com.geofile.service;
 
-import com.geofile.pojo.VerificationCode;
+import com.geofile.entity.VerificationCode;
 import com.baomidou.mybatisplus.extension.service.IService;
 
 /**

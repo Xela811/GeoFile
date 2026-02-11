@@ -4,7 +4,7 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.geofile.mapper.VerificationCodeMapper">
 
-    <resultMap id="BaseResultMap" type="com.geofile.pojo.VerificationCode">
+    <resultMap id="BaseResultMap" type="com.geofile.entity.VerificationCode">
             <id property="id" column="id" />
             <result property="code" column="code" />
             <result property="type" column="type" />

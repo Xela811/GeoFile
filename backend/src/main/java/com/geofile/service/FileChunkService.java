@@ -1,6 +1,6 @@
 package com.geofile.service;
 
-import com.geofile.pojo.FileChunk;
+import com.geofile.entity.FileChunk;
 import com.baomidou.mybatisplus.extension.service.IService;
 
 /**

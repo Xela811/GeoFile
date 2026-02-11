@@ -1,7 +1,7 @@
 package com.geofile.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.pojo.VerificationCode;
+import com.geofile.entity.VerificationCode;
 import com.geofile.service.VerificationCodeService;
 import com.geofile.mapper.VerificationCodeMapper;
 import org.springframework.stereotype.Service;

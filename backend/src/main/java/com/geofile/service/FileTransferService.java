@@ -1,6 +1,6 @@
 package com.geofile.service;
 
-import com.geofile.pojo.FileTransfer;
+import com.geofile.entity.FileTransfer;
 import com.baomidou.mybatisplus.extension.service.IService;
 
 /**

@@ -1,7 +1,7 @@
 package com.geofile.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.pojo.File;
+import com.geofile.entity.File;
 import com.geofile.service.FileService;
 import com.geofile.mapper.FileMapper;
 import org.springframework.stereotype.Service;

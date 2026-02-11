@@ -1,7 +1,7 @@
 package com.geofile.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.pojo.UserLocation;
+import com.geofile.entity.UserLocation;
 import com.geofile.service.UserLocationService;
 import com.geofile.mapper.UserLocationMapper;
 import org.springframework.stereotype.Service;
