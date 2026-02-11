@@ -1,0 +1,13 @@
+package com.geofile.service;
+
+import com.geofile.pojo.File;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+* @author xela
+* @description 针对表【t_file(文件信息表)】的数据库操作Service
+* @createDate 2026-02-10 23:30:13
+*/
+public interface FileService extends IService<File> {
+
+}

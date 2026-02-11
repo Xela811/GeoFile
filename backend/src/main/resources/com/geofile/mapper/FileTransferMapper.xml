@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.geofile.mapper.FileTransferMapper">
+
+    <resultMap id="BaseResultMap" type="com.geofile.pojo.FileTransfer">
+            <id property="id" column="id" />
+            <result property="fileId" column="file_id" />
+            <result property="transferCode" column="transfer_code" />
+            <result property="ipAddress" column="ip_address" />
+            <result property="userAgent" column="user_agent" />
+            <result property="downloadTime" column="download_time" />
+            <result property="downloadDuration" column="download_duration" />
+            <result property="isCompleted" column="is_completed" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,file_id,transfer_code,ip_address,user_agent,download_time,
+        download_duration,is_completed
+    </sql>
+</mapper>
