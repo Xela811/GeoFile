@@ -52,6 +52,50 @@ import request from '@/utils/request'
     })
   }
 
+  export interface UploadInfo {
+    uploadId: string
+    fileName: string
+    fileSize: number
+    chunkSize: number
+    totalChunks: number
+    uploadedChunks: number
+    completed: boolean
+  }
+
+  export interface UploadProgress {
+    uploadId: string
+    currentChunk: number
+    totalChunks: number
+    progress: number
+    status: string
+    fileName: string
+    fileSize: number
+    uploadedBytes: number
+  }
+
+  export function initChunkUpload(params: {
+    fileName: string
+    fileSize: number
+    chunkSize?: number
+    chunkIndex?: number
+  }) {
+    return request.post<UploadInfo>('/file/upload/init', null, { params })
+  }
+
+  export function uploadChunk(formData: FormData) {
+    return request.post<UploadProgress>('/file/upload/chunk', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  }
+
+  export function mergeChunks(params: {
+    fileName: string
+    totalChunks: number
+    fileHash?: string
+  }) {
+    return request.post<FileVO>('/file/upload/merge', null, { params })
+  }
+
   export function searchNearbyFiles(params: NearbyFilesParams) {
     return request.get<NearbyFileVO[]>('/file/nearby', { params })
   }

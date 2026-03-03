@@ -31,6 +31,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**")
                 .excludePathPatterns(
                     "/api/verification/**",           // 排除验证码接口
+                    "/api/file/**",                   // 排除所有文件接口（不需要验证码）
                     "/ws/**"                           // 排除WebSocket接口
                 );
 

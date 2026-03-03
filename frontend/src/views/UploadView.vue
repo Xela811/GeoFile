@@ -1,140 +1,160 @@
 <template>
-  <div class="upload-container">
+  <div class="upload-page">
     <div class="top-bar">
       <el-button type="primary" link :icon="Back" @click="goHome"> 返回首页 </el-button>
     </div>
-    <el-card>
-      <template #header>
-        <h2>上传文件</h2>
+
+    <!-- 标题区域 -->
+    <div class="page-header">
+      <h1>文件上传</h1>
+      <p class="subtitle">支持拖拽上传，大文件自动切换分片上传模式</p>
+    </div>
+
+    <!-- 可复用上传组件 -->
+    <FileUpload
+      ref="uploadRef"
+      title="上传文件"
+      :multiple="true"
+      :limit="10"
+      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 100MB"
+      @success="handleUploadSuccess"
+      @error="handleUploadError"
+    >
+      <template #success="{ files }">
+        <el-alert
+          v-if="files.length > 0"
+          title="上传成功"
+          type="success"
+          :closable="false"
+          style="margin-top: 20px"
+        >
+          <template #default>
+            <div v-for="file in files" :key="file.uid" class="success-item">
+              <el-icon><SuccessFilled /></el-icon>
+              <span>{{ file.name }}</span>
+            </div>
+          </template>
+        </el-alert>
       </template>
+    </FileUpload>
 
-      <el-upload
-        drag
-        action="/api/file/upload"
-        :before-upload="beforeUpload"
-        :on-progress="handleProgress"
-        :on-success="handleSuccess"
-        :on-error="handleError"
-        multiple
-      >
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
-        <template #tip>
-          <div class="el-upload__tip">
-            支持 JPG、PNG、PDF、DOC、TXT 等格式，单个文件不超过 100MB
-          </div>
+    <!-- 快捷操作 -->
+    <div class="quick-actions">
+      <el-card>
+        <template #header>
+          <span>快捷操作</span>
         </template>
-      </el-upload>
-
-      <!-- 上传进度列表 -->
-      <div v-if="uploadList.length > 0" class="upload-list">
-        <div v-for="item in uploadList" :key="item.uid" class="upload-item">
-          <div class="upload-info">
-            <span>{{ item.name }}</span>
-            <el-progress :percentage="item.progress" />
-          </div>
-          <el-button
-            v-if="item.status === 'uploading'"
-            type="danger"
-            size="small"
-            @click="handleCancelUpload(item.uid)"
-          >
-            取消
+        <div class="action-buttons">
+          <el-button type="primary" :icon="Upload" @click="triggerUpload">
+            <el-icon><Upload /></el-icon>
+            立即上传
+          </el-button>
+          <el-button @click="handleClear" :icon="Delete">
+            <el-icon><Delete /></el-icon>
+            清空列表
           </el-button>
         </div>
-      </div>
-    </el-card>
+      </el-card>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { UploadFilled, Back } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router' // 2. 引入路由
+import { useRouter } from 'vue-router'
+import { Back, Upload, Delete, SuccessFilled } from '@element-plus/icons-vue'
+import { ElMessage, type UploadUserFile } from 'element-plus'
+import FileUpload from '@/components/FileUpload.vue'
 
-const router = useRouter() // 初始化路由
+const router = useRouter()
+const uploadRef = ref<InstanceType<typeof FileUpload>>()
+uploadRef.value?.clear() // 清空列表
+uploadRef.value?.startUpload() // 开始上传
 
-// 3. 跳转函数
+// 返回首页
 const goHome = () => {
-  router.push('/') // 对应你路由配置中 HomeView.vue 的路径
+  router.push('/')
 }
 
-interface UploadListItem {
-  uid: string
-  name: string
-  progress: number
-  status: 'uploading' | 'success' | 'error'
+// 上传成功
+const handleUploadSuccess = (files: UploadUserFile[]) => {
+  console.log('上传成功:', files)
+  ElMessage.success(`成功上传 ${files.length} 个文件`)
 }
 
-interface UploadProgressEvent {
-  uid?: string
-  percent?: number
+// 上传失败
+const handleUploadError = (error: Error) => {
+  console.error('上传失败:', error)
 }
 
-const uploadList = ref<UploadListItem[]>([])
-
-const beforeUpload = (file: File) => {
-  const isLt100M = file.size / 1024 / 1024 < 100
-  if (!isLt100M) {
-    ElMessage.error('文件大小不能超过 100MB')
-    return false
-  }
-  return true
-}
-
-const handleProgress = (event: UploadProgressEvent) => {
-  const item = uploadList.value.find((i) => i.uid === event.uid)
-  if (item) {
-    item.progress = event.percent ?? 0
-    item.status = 'uploading'
+// 立即上传
+const triggerUpload = () => {
+  if (uploadRef.value) {
+    uploadRef.value.startUpload()
   }
 }
 
-const handleSuccess = (_response: unknown, uploadFile?: { uid?: string }) => {
-  const item = uploadList.value.find((i) => i.uid === uploadFile?.uid)
-  if (item) {
-    item.progress = 100
-    item.status = 'success'
+// 清空列表
+const handleClear = () => {
+  if (uploadRef.value) {
+    uploadRef.value.clear()
+    ElMessage.info('已清空文件列表')
   }
-  ElMessage.success('上传成功')
-}
-
-const handleError = () => {
-  ElMessage.error('上传失败')
-}
-
-const handleCancelUpload = (uid: string) => {
-  uploadList.value = uploadList.value.filter((i) => i.uid !== uid)
 }
 </script>
 
 <style scoped lang="scss">
-.upload-container {
-  max-width: 800px;
+.upload-page {
+  max-width: 1000px;
   margin: 0 auto;
+  padding: 20px;
 }
 
-.upload-list {
+.top-bar {
+  margin-bottom: 20px;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 40px;
+
+  h1 {
+    font-size: 32px;
+    font-weight: 600;
+    color: #303133;
+    margin: 0 0 10px 0;
+  }
+
+  .subtitle {
+    font-size: 14px;
+    color: #909399;
+    margin: 0;
+  }
+}
+
+.quick-actions {
   margin-top: 20px;
 
-  .upload-item {
+  .action-buttons {
     display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 16px;
-    background: #f5f7fa;
-    border-radius: 4px;
-    margin-bottom: 10px;
+    gap: 12px;
+    justify-content: center;
+  }
+}
 
-    .upload-info {
-      flex: 1;
+.success-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #ebeef5;
 
-      span {
-        display: block;
-        margin-bottom: 8px;
-      }
-    }
+  &:last-child {
+    border-bottom: none;
+  }
+
+  span {
+    color: #67c23a;
   }
 }
 </style>

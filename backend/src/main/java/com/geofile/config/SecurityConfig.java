@@ -20,7 +20,7 @@ public class SecurityConfig {
         http
             // 禁用CSRF（前后端分离不需要）
             .csrf(AbstractHttpConfigurer::disable)
-            // 禁用CORS（通过配置类控制）
+            // 禁用默认CORS（使用自定义CORS配置）
             .cors(AbstractHttpConfigurer::disable)
             // 配置授权规则
             .authorizeHttpRequests(auth -> auth
@@ -29,11 +29,10 @@ public class SecurityConfig {
                     "/api/verification/**",           // 验证码相关接口
                     "/api/verification/captcha",       // 获取验证码图片
                     "/api/verification/send",          // 发送验证码
-                    "/api/file/list",                  // 文件列表
-                    "/api/file/nearby",                // 附近文件
-                    "/api/file/download/**",           // 文件下载
+                    "/api/file/**",                    // 所有文件相关接口（包括上传、下载、列表等）
                     "/ws/**",                          // WebSocket连接
-                    "/actuator/**"                     // 健康检查
+                    "/actuator/**",                    // 健康检查
+                    "/doc.html", "/webjars/**", "/v3/api-docs/**", "/swagger-resources/**"
                 ).permitAll()
                 // 其他接口都需要认证（将通过验证码验证）
                 .anyRequest().authenticated()
