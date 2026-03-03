@@ -9,16 +9,23 @@ spring:
         pool:
           max-active: 8  # 连接池最大连接数
   application:
-    name: backend
+    name: geofile
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/geofile?characterEncoding=utf-8&allowPublicKeyRetrieval=true&useSSL=false
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+
+# JWT配置
+jwt:
+  secret: geofile-secret-key-2024-2025-very-long-secret-key-for-jwt-generation
+  expiration: 300  # 验证码有效期5分钟
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
 # Knife4j & SpringDoc 配置
 springdoc:
   api-docs:
