@@ -4,6 +4,7 @@ import com.geofile.entity.File;
 import com.geofile.entity.FileVO;
 import com.geofile.entity.UploadInfo;
 import com.geofile.entity.UploadProgress;
+import com.geofile.service.FileLocationService;
 import com.geofile.service.FileService;
 import com.geofile.service.FileStorageService;
 import com.geofile.service.FileUploadService;
@@ -24,7 +25,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +36,9 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class FileUploadServiceImpl implements FileUploadService {
+
+    @Autowired
+    private FileLocationService fileLocationService;
 
     @Autowired
     private FileStorageService fileStorageService;
@@ -64,6 +67,22 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Override
     @Transactional
     public FileVO uploadFile(MultipartFile file) {
+        // 调用带位置参数的版本，位置为空
+        return uploadFile(file, null, null, null);
+    }
+
+    /**
+     * 上传文件并记录地理位置
+     *
+     * @param file 文件
+     * @param lat 纬度
+     * @param lng 经度
+     * @param radius 搜索半径（米）
+     * @return 文件信息
+     */
+    @Transactional
+    @Override
+    public FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius) {
         try {
             // 1. 验证文件
             String originalFilename = file.getOriginalFilename();
@@ -90,12 +109,22 @@ public class FileUploadServiceImpl implements FileUploadService {
             fileEntity.setDownloadCount(0);
             fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusDays(30).atZone(ZoneId.systemDefault()).toInstant())); // 默认30天有效期
 
-            // 4. 保存到数据库
+            // 4. 设置地理位置信息
+            if (lat != null && lng != null) {
+                fileEntity.setLocationLat(lat);
+                fileEntity.setLocationLng(lng);
+                fileEntity.setLocationRadius(radius != null ? radius : 1000);
+                log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}", originalFilename, lat, lng, radius);
+            } else {
+                log.info("文件上传（无位置信息）: {}", originalFilename);
+            }
+
+            // 5. 保存到数据库
             fileService.save(fileEntity);
 
             log.info("文件上传成功: {}", originalFilename);
 
-            // 5. 返回文件信息
+            // 6. 返回文件信息
             return convertToFileVO(fileEntity);
 
         } catch (IOException e) {
@@ -110,6 +139,16 @@ public class FileUploadServiceImpl implements FileUploadService {
         return files.stream()
                 .filter(file -> !file.isEmpty())
                 .map(this::uploadFile)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 批量上传文件并记录位置
+     */
+    public List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius) {
+        return files.stream()
+                .filter(file -> !file.isEmpty())
+                .map(file -> uploadFile(file, lat, lng, radius))
                 .collect(Collectors.toList());
     }
 
@@ -355,6 +394,31 @@ public class FileUploadServiceImpl implements FileUploadService {
             log.debug("分片文件清理成功: {}", tempDir);
         } catch (IOException e) {
             log.error("分片文件清理失败", e);
+        }
+    }
+
+    /**
+     * 根据地理位置搜索附近文件
+     */
+    public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId) {
+        try {
+            // 由于FileLocationService需要注入FileMapper，这里直接调用方法
+            // 实际项目中应该通过Spring注入
+            return fileLocationService.searchNearbyFiles(lat, lng, radius, excludeFileId);
+        } catch (Exception e) {
+            log.error("搜索附近文件失败", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 更新文件地理位置信息
+     */
+    public void updateFileLocation(Long fileId, Double lat, Double lng, Integer radius) {
+        try {
+            fileLocationService.updateFileLocation(fileId, lat, lng, radius);
+        } catch (Exception e) {
+            log.error("更新文件地理位置失败", e);
         }
     }
 

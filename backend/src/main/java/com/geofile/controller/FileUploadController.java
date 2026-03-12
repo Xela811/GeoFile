@@ -47,6 +47,36 @@ public class FileUploadController {
     }
 
     /**
+     * 上传单个文件并记录地理位置
+     *
+     * @param file 文件
+     * @param lat 纬度
+     * @param lng 经度
+     * @param radius 搜索半径（米）
+     * @return 文件信息
+     */
+    @PostMapping("/upload-with-location")
+    @Operation(summary = "上传单个文件并记录位置", description = "上传文件时同时记录地理位置信息")
+    public Result<FileVO> uploadFileWithLocation(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            @RequestParam(required = false) Integer radius) {
+        try {
+            log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}",
+                    file.getOriginalFilename(), lat, lng, radius);
+
+            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius);
+
+            return Result.success(result);
+
+        } catch (Exception e) {
+            log.error("文件上传失败: {}", file.getOriginalFilename(), e);
+            return Result.error("文件上传失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 上传多个文件
      */
     @PostMapping("/upload/batch")
@@ -56,6 +86,36 @@ public class FileUploadController {
             log.info("批量文件上传开始: {} 个文件", files.length);
 
             List<FileVO> results = fileUploadService.uploadFiles(List.of(files));
+
+            return Result.success(results);
+
+        } catch (Exception e) {
+            log.error("批量文件上传失败", e);
+            return Result.error("批量文件上传失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 批量上传文件并记录位置
+     *
+     * @param files 文件列表
+     * @param lat 纬度
+     * @param lng 经度
+     * @param radius 搜索半径（米）
+     * @return 文件信息列表
+     */
+    @PostMapping("/upload/batch-with-location")
+    @Operation(summary = "批量上传文件并记录位置", description = "批量上传文件时同时记录地理位置信息")
+    public Result<List<FileVO>> uploadFilesWithLocation(
+            @RequestParam("files") MultipartFile[] files,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            @RequestParam(required = false) Integer radius) {
+        try {
+            log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}",
+                    files.length, lat, lng, radius);
+
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius);
 
             return Result.success(results);
 

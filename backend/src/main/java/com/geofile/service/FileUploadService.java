@@ -3,6 +3,7 @@ package com.geofile.service;
 import com.geofile.entity.FileVO;
 import com.geofile.entity.UploadInfo;
 import com.geofile.entity.UploadProgress;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
@@ -19,6 +20,11 @@ public interface FileUploadService {
      */
     FileVO uploadFile(MultipartFile file);
 
+    @Transactional
+    FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius);
+
+
+    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius);
     /**
      * 上传多个文件
      * @param files 上传的文件列表

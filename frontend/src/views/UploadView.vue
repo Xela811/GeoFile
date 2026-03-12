@@ -39,7 +39,7 @@
     </FileUpload>
 
     <!-- 快捷操作 -->
-    <div class="quick-actions">
+    <!--<div class="quick-actions">
       <el-card>
         <template #header>
           <span>快捷操作</span>
@@ -55,14 +55,14 @@
           </el-button>
         </div>
       </el-card>
-    </div>
+    </div>-->
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Back, Upload, Delete, SuccessFilled } from '@element-plus/icons-vue'
+import { Back, SuccessFilled } from '@element-plus/icons-vue'
 import { ElMessage, type UploadUserFile } from 'element-plus'
 import FileUpload from '@/components/FileUpload.vue'
 
@@ -88,19 +88,19 @@ const handleUploadError = (error: Error) => {
 }
 
 // 立即上传
-const triggerUpload = () => {
-  if (uploadRef.value) {
-    uploadRef.value.startUpload()
-  }
-}
+//const triggerUpload = () => {
+//  if (uploadRef.value) {
+//    uploadRef.value.startUpload()
+//  }
+//}
 
 // 清空列表
-const handleClear = () => {
-  if (uploadRef.value) {
-    uploadRef.value.clear()
-    ElMessage.info('已清空文件列表')
-  }
-}
+//const handleClear = () => {
+//if (uploadRef.value) {
+//uploadRef.value.clear()
+//ElMessage.info('已清空文件列表')
+//}
+//}
 </script>
 
 <style scoped lang="scss">

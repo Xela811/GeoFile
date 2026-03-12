@@ -127,6 +127,37 @@ import { ElMessage } from 'element-plus'
 import type { UploadInstance, UploadUserFile, UploadRawFile, UploadFile } from 'element-plus'
 import { UploadFilled, Upload, Delete, Document } from '@element-plus/icons-vue'
 
+// 开发测试配置
+const FIXED_LAT = 38.914
+const FIXED_LNG = 121.614
+
+// 获取坐标（开发测试模式使用固定坐标）
+const getCoordinates = (): { lat: number; lng: number } | null => {
+  // 检查localStorage中是否标记为固定坐标模式
+  const savedLocationStr = localStorage.getItem('userLocation')
+  if (savedLocationStr) {
+    try {
+      const locationData = JSON.parse(savedLocationStr)
+      if (locationData.useFixedCoords) {
+        console.log('使用固定坐标:', { lat: FIXED_LAT, lng: FIXED_LNG })
+        return { lat: FIXED_LAT, lng: FIXED_LNG }
+      }
+    } catch (error) {
+      console.error('解析位置信息失败:', error)
+    }
+  }
+
+  // 检查当前是否为固定坐标模式
+  const useFixedCoords = localStorage.getItem('useFixedCoords') === 'true'
+  if (useFixedCoords) {
+    console.log('使用固定坐标:', { lat: FIXED_LAT, lng: FIXED_LNG })
+    return { lat: FIXED_LAT, lng: FIXED_LNG }
+  }
+
+  // 返回null表示不使用固定坐标
+  return null
+}
+
 interface Props {
   uploadUrl?: string
   title?: string
@@ -244,9 +275,39 @@ const startUpload = async () => {
   isUploading.value = true
 
   try {
+    // 获取位置信息
+    const savedLocationStr = localStorage.getItem('userLocation')
+    let locationData = null
+    if (savedLocationStr) {
+      try {
+        locationData = JSON.parse(savedLocationStr)
+        console.log('从 localStorage 获取位置信息:', locationData)
+
+        // 如果是固定坐标模式，添加警告
+        if (locationData.useFixedCoords) {
+          ElMessage.warning('开发测试模式：使用固定坐标上传文件，位置可能不准确')
+        }
+      } catch (error) {
+        console.error('解析位置信息失败:', error)
+        locationData = null
+      }
+    }
+
+    // 如果没有位置信息，显示提示
+    if (!locationData || !locationData.lat || !locationData.lng) {
+      ElMessage.info('未检测到位置信息，文件上传成功但不记录位置')
+    }
+
     // 获取Token
     const tokenRes = await fetch('/api/verification/token/download')
     const { data: token } = await tokenRes.json()
+
+    // 决定使用哪个上传接口
+    const useLocationApi = locationData && locationData.lat && locationData.lng
+    const uploadUrl = useLocationApi ? '/api/file/upload-with-location' : props.uploadUrl
+
+    console.log('使用上传接口:', uploadUrl)
+    console.log('位置信息:', locationData)
 
     // 逐个上传文件
     const currentSuccessFiles: UploadUserFile[] = []
@@ -260,8 +321,33 @@ const startUpload = async () => {
         const formData = new FormData()
         formData.append('file', file.raw!)
 
+        // --- 核心修改：如果存在位置信息，则附加到表单中 ---
+        let uploadLat = locationData?.lat
+        let uploadLng = locationData?.lng
+        let uploadRadius = locationData?.radius || 1000
+
+        // 如果在固定坐标模式，使用固定坐标
+        if (locationData?.useFixedCoords) {
+          uploadLat = FIXED_LAT
+          uploadLng = FIXED_LNG
+          uploadRadius = 1000 // 固定模式使用默认1000米
+          console.log('使用固定坐标添加到表单:', { lat: uploadLat, lng: uploadLng, radius: uploadRadius })
+        } else if (locationData) {
+          console.log('添加位置参数到表单:', {
+            lat: locationData.lat,
+            lng: locationData.lng,
+            radius: locationData.radius
+          })
+        }
+
+        if (uploadLat && uploadLng) {
+          formData.append('lat', uploadLat.toString())
+          formData.append('lng', uploadLng.toString())
+          formData.append('radius', uploadRadius.toString())
+        }
+
         // 上传文件
-        const response = await fetch(props.uploadUrl, {
+        const response = await fetch(uploadUrl, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,

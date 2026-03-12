@@ -81,4 +81,9 @@ public class FileVO {
      * 地理位置（经度）
      */
     private Double locationLng;
+
+    /**
+     * 距离（米）
+     */
+    private Double distance;
 }

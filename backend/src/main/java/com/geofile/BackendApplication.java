@@ -8,12 +8,10 @@ import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication(exclude = {SecurityAutoConfiguration.class})
 @MapperScan("com.geofile.mapper")
-//@ComponentScan("com.geofile")
+@ComponentScan("com.geofile")  // 明确指定扫描包
 public class BackendApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(BackendApplication.class, args);
     }
-
-
 }

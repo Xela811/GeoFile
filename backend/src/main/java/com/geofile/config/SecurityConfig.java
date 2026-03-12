@@ -32,7 +32,8 @@ public class SecurityConfig {
                     "/api/file/**",                    // 所有文件相关接口（包括上传、下载、列表等）
                     "/ws/**",                          // WebSocket连接
                     "/actuator/**",                    // 健康检查
-                    "/doc.html", "/webjars/**", "/v3/api-docs/**", "/swagger-resources/**"
+                    "/doc.html", "/webjars/**", "/v3/api-docs/**", "/swagger-resources/**",
+                        "/swagger-ui/**","/swagger-ui.html","/v3/api-docs/**","/api/location/**","/api/amap/**"
                 ).permitAll()
                 // 其他接口都需要认证（将通过验证码验证）
                 .anyRequest().authenticated()
