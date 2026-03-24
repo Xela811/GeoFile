@@ -109,6 +109,10 @@ public class FileUploadServiceImpl implements FileUploadService {
             fileEntity.setDownloadCount(0);
             fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusDays(30).atZone(ZoneId.systemDefault()).toInstant())); // 默认30天有效期
 
+            // 生成上传令牌（用于免登录身份验证）
+            String uploadToken = generateUploadToken();
+            fileEntity.setUploadToken(uploadToken);
+
             // 4. 设置地理位置信息
             if (lat != null && lng != null) {
                 fileEntity.setLocationLat(lat);
@@ -355,6 +359,10 @@ public class FileUploadServiceImpl implements FileUploadService {
         fileEntity.setDownloadCount(0);
         fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusDays(30).atZone(ZoneId.systemDefault()).toInstant()));
 
+        // 生成上传令牌（用于免登录身份验证）
+        String uploadToken = generateUploadToken();
+        fileEntity.setUploadToken(uploadToken);
+
         // 保存到数据库
         fileService.save(fileEntity);
 
@@ -366,6 +374,14 @@ public class FileUploadServiceImpl implements FileUploadService {
      */
     private String generateFileHash() {
         return UUID.randomUUID().toString();
+    }
+
+    /**
+     * 生成上传令牌
+     */
+    private String generateUploadToken() {
+        return UUID.randomUUID().toString().replace("-", "") +
+               Long.toHexString(System.currentTimeMillis());
     }
 
     /**
@@ -404,7 +420,8 @@ public class FileUploadServiceImpl implements FileUploadService {
         try {
             // 由于FileLocationService需要注入FileMapper，这里直接调用方法
             // 实际项目中应该通过Spring注入
-            return fileLocationService.searchNearbyFiles(lat, lng, radius, excludeFileId);
+            return fileLocationService.searchNearbyFiles(lat, lng, radius, excludeFileId,
+                    1, 100, "upload_time", "DESC", null, null);
         } catch (Exception e) {
             log.error("搜索附近文件失败", e);
             return new ArrayList<>();
@@ -449,6 +466,7 @@ public class FileUploadServiceImpl implements FileUploadService {
         vo.setDownloadCount(file.getDownloadCount());
         vo.setStatus(file.getStatus());
         vo.setStatusText(file.getStatus() == 1 ? "正常" : "已删除");
+        vo.setUploadToken(file.getUploadToken());
         return vo;
     }
 

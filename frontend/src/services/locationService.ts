@@ -29,12 +29,20 @@ export interface NearbyFile {
   locationLat?: number
   locationLng?: number
   distance?: number // 距离(米)
+  uploadToken?: string // 上传令牌
+  downloadToken?: string // 下载令牌
 }
 
 export interface LocationResponse {
-  location: LocationInfo
+  location?: LocationInfo
   files: NearbyFile[]
   count: number
+  total?: number
+  pageNum?: number
+  pageSize?: number
+  totalPages?: number
+  hasPrevious?: boolean
+  hasNext?: boolean
 }
 
 class LocationService {
@@ -133,28 +141,76 @@ class LocationService {
     lng: number,
     radius: number = 1000,
     excludeFileId?: number,
+    keyword?: string,
+    fileType?: string,
+    pageNum: number = 1,
+    pageSize: number = 10,
+    sortBy?: string,
+    sortOrder?: string,
   ): Promise<LocationResponse> {
     try {
       const params = new URLSearchParams({
         lat: lat.toString(),
         lng: lng.toString(),
         radius: radius.toString(),
+        pageNum: pageNum.toString(),
+        pageSize: pageSize.toString(),
       })
 
       if (excludeFileId) {
         params.append('excludeFileId', excludeFileId.toString())
       }
 
-      const response = await fetch(`${this.baseUrl}/nearby?${params.toString()}`)
+      if (keyword) {
+        params.append('keyword', keyword)
+      }
+
+      if (fileType) {
+        params.append('fileType', fileType)
+      }
+
+      if (sortBy) {
+        params.append('sortBy', sortBy)
+      }
+
+      if (sortOrder) {
+        params.append('sortOrder', sortOrder)
+      }
+
+      console.log(`正在搜索附近文件: lat=${lat}, lng=${lng}, radius=${radius}, keyword=${keyword}, fileType=${fileType}`)
+
+      // 添加超时控制
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 15000) // 15秒超时
+
+      const response = await fetch(`/api/file/nearby?${params.toString()}`, {
+        signal: controller.signal,
+      })
+
+      clearTimeout(timeoutId)
+
+      console.log(`API响应状态: ${response.status}`)
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
 
       const result = await response.json()
+      console.log(`API响应数据:`, result)
 
       if (result.code === 200) {
         return result.data
       } else {
         throw new Error(result.message || '获取附近文件失败')
       }
-    } catch (error) {
+    } catch (error: any) {
+      console.error('获取附近文件失败:', error)
+
+      // 处理超时错误
+      if (error.name === 'AbortError') {
+        throw new Error('请求超时，请检查网络连接或稍后重试')
+      }
+
       throw error
     }
   }

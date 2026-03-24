@@ -86,4 +86,14 @@ public class FileVO {
      * 距离（米）
      */
     private Double distance;
+
+    /**
+     * 上传令牌（用于验证上传者身份）
+     */
+    private String uploadToken;
+
+    /**
+     * 下载令牌
+     */
+    private String downloadToken;
 }

@@ -29,40 +29,77 @@ public class FileNearbyController {
     private FileService fileService;
 
     /**
-     * 获取附近文件
+     * 获取附近文件（支持分页）
      *
-     * 接口：GET /api/file/nearby?lat=39.9042&lng=116.4074&radius=1000
-     * 参数：lat（纬度）、lng（经度）、radius（搜索半径）
-     * 返回：附近文件列表，包含距离信息
+     * 接口：GET /api/file/nearby?lat=39.9042&lng=116.4074&radius=1000&pageNum=1&pageSize=10
+     * 参数：
+     * - lat: 纬度
+     * - lng: 经度
+     * - radius: 搜索半径（米），默认1000米
+     * - pageNum: 当前页码，默认1
+     * - pageSize: 每页大小，默认10
+     * - excludeFileId: 排除的文件ID（可选）
+     * - sortBy: 排序字段（可选）
+     * - sortOrder: 排序方向（可选，默认DESC）
+     * - keyword: 搜索关键词（可选）
+     * - fileType: 文件类型（可选）
      *
      * 使用示例：
-     * GET /api/file/nearby?lat=39.9042&lng=116.4074&radius=1000
+     * GET /api/file/nearby?lat=39.9042&lng=116.4074&radius=1000&pageNum=1&pageSize=10
+     * GET /api/file/nearby?lat=39.9042&lng=116.4074&radius=1000&pageNum=1&pageSize=10&sortBy=upload_time&fileType=pdf
      *
      * @param lat 纬度
      * @param lng 经度
      * @param radius 搜索半径（米），默认1000米
+     * @param pageNum 当前页码，默认1
+     * @param pageSize 每页大小，默认10
      * @param excludeFileId 排除的文件ID（可选）
-     * @return 附近文件列表
+     * @param sortBy 排序字段（可选）
+     * @param sortOrder 排序方向（可选）
+     * @param keyword 搜索关键词（可选）
+     * @param fileType 文件类型（可选）
+     * @return 附近文件列表（包含分页信息和距离）
      */
     @GetMapping("/nearby")
-    @Operation(summary = "获取附近文件", description = "根据地理位置搜索附近的文件，包含距离计算")
+    @Operation(summary = "获取附近文件", description = "根据地理位置搜索附近的文件，支持分页查询（包含距离计算）")
     public Result<Map<String, Object>> getNearbyFiles(
             @Parameter(description = "纬度", example = "39.9042") @RequestParam Double lat,
             @Parameter(description = "经度", example = "116.4074") @RequestParam Double lng,
             @Parameter(description = "搜索半径（米）", example = "1000") @RequestParam(defaultValue = "1000") Integer radius,
-            @Parameter(description = "排除的文件ID（可选）", example = "1") @RequestParam(required = false) Long excludeFileId) {
+            @Parameter(description = "当前页码", example = "1") @RequestParam(defaultValue = "1") Integer pageNum,
+            @Parameter(description = "每页大小", example = "10") @RequestParam(defaultValue = "10") Integer pageSize,
+            @Parameter(description = "排除的文件ID（可选）", example = "1") @RequestParam(required = false) Long excludeFileId,
+            @Parameter(description = "排序字段（可选）", example = "upload_time") @RequestParam(required = false) String sortBy,
+            @Parameter(description = "排序方向（可选）", example = "DESC") @RequestParam(required = false) String sortOrder,
+            @Parameter(description = "搜索关键词（可选）") @RequestParam(required = false) String keyword,
+            @Parameter(description = "文件类型（可选）") @RequestParam(required = false) String fileType) {
 
         try {
-            log.info("搜索附近文件: lat={}, lng={}, radius={}, excludeFileId={}", lat, lng, radius, excludeFileId);
+            log.info("搜索附近文件: lat={}, lng={}, radius={}, pageNum={}, pageSize={}, keyword={}, fileType={}",
+                    lat, lng, radius, pageNum, pageSize, keyword, fileType);
 
-            // 调用服务方法搜索附近文件
-            List<FileVO> files = fileService.searchNearbyFiles(lat, lng, radius, excludeFileId);
+            // 调用服务方法搜索附近文件（使用MyBatis-Plus分页）
+            List<FileVO> files = fileService.searchNearbyFiles(lat, lng, radius, excludeFileId, pageNum, pageSize, sortBy, sortOrder, keyword, fileType);
+
+            // 计算总记录数
+            Long total = fileService.countNearbyFiles(lat, lng, radius, keyword, fileType);
+
+            // 计算总页数
+            int totalPages = (int) ((total + pageSize - 1) / pageSize);
+            boolean hasPrevious = pageNum > 1;
+            boolean hasNext = pageNum < totalPages || (totalPages == 0 && total > 0);
 
             // 封装返回数据
             Map<String, Object> result = new HashMap<>();
             result.put("lat", lat);
             result.put("lng", lng);
             result.put("radius", radius);
+            result.put("pageNum", pageNum);
+            result.put("pageSize", pageSize);
+            result.put("total", total);
+            result.put("totalPages", totalPages);
+            result.put("hasPrevious", hasPrevious);
+            result.put("hasNext", hasNext);
             result.put("count", files.size());
             result.put("files", files);
 
@@ -83,7 +120,7 @@ public class FileNearbyController {
     public Result<List<FileVO>> getFileList() {
         try {
             // 这里使用默认参数搜索附近文件
-            List<FileVO> files = fileService.searchNearbyFiles(39.9042, 116.4074, 5000, null);
+            List<FileVO> files = fileService.searchNearbyFiles(39.9042, 116.4074, 5000, null, 1, 100, "upload_time", "DESC", null, null);
             return Result.success(files);
         } catch (Exception e) {
             log.error("获取文件列表失败", e);

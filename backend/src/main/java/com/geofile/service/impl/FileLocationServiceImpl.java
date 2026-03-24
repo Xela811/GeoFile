@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,12 +36,15 @@ public class FileLocationServiceImpl extends ServiceImpl<FileMapper,File> implem
      * 使用简单的经纬度范围查询实现
      */
     @Override
-    public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long fileId) {
+    public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long fileId,
+                                           Integer pageNum, Integer pageSize,
+                                           String sortBy, String sortOrder, String keyword, String fileType) {
         if (lat == null || lng == null || radius == null) {
             return new ArrayList<>();
         }
 
-        log.info("搜索附近文件: lat={}, lng={}, radius={}, excludeFileId={}", lat, lng, radius, fileId);
+        log.info("搜索附近文件: lat={}, lng={}, radius={}, excludeFileId={}, keyword={}, fileType={}",
+                lat, lng, radius, fileId, keyword, fileType);
 
         // 计算经纬度范围
         // 1度纬度 ≈ 111km (111000米)
@@ -64,6 +68,22 @@ public class FileLocationServiceImpl extends ServiceImpl<FileMapper,File> implem
         // 排除自己
         if (fileId != null) {
             queryWrapper.ne(File::getId, fileId);
+        }
+
+        // 搜索关键词
+        if (keyword != null && !keyword.isEmpty()) {
+            queryWrapper.like(File::getFileName, keyword);
+        }
+
+        // 按文件类型过滤（支持类型分类映射）
+        if (fileType != null && !fileType.isEmpty()) {
+            List<String> extensions = getFileExtensionsByType(fileType);
+            if (!extensions.isEmpty()) {
+                queryWrapper.in(File::getFileType, extensions);
+            } else {
+                // 如果不是预定义类型，直接匹配
+                queryWrapper.eq(File::getFileType, fileType);
+            }
         }
 
         // 按距离排序
@@ -136,5 +156,34 @@ public class FileLocationServiceImpl extends ServiceImpl<FileMapper,File> implem
         vo.setDistance(null);
 
         return vo;
+    }
+
+    /**
+     * 根据文件类型分类获取对应的文件扩展名列表
+     * @param fileType 文件类型分类（image, video, audio, pdf, document, zip, other）
+     * @return 对应的扩展名列表
+     */
+    private List<String> getFileExtensionsByType(String fileType) {
+        if (fileType == null || fileType.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        switch (fileType.toLowerCase()) {
+            case "image":
+                return Arrays.asList("png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif");
+            case "video":
+                return Arrays.asList("mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp", "mpeg", "mpg");
+            case "audio":
+                return Arrays.asList("mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "ape", "amr");
+            case "pdf":
+                return Arrays.asList("pdf");
+            case "document":
+                return Arrays.asList("doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp", "md");
+            case "zip":
+                return Arrays.asList("zip", "rar", "7z", "tar", "gz", "bz2", "xz");
+            case "other":
+            default:
+                return new ArrayList<>();
+        }
     }
 }

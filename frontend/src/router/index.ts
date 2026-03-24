@@ -30,11 +30,6 @@ const routes: RouteRecordRaw[] = [
     name: 'FileDetail',
     component: () => import('@/views/FileDetail.vue'),
   },
-  {
-    path: '/location',
-    name: 'Location',
-    component: () => import('@/views/LocationView.vue'),
-  },
 ]
 
 const router = createRouter({

@@ -184,6 +184,7 @@ const emit = defineEmits<{
   success: [files: UploadUserFile[]]
   error: [error: Error]
   'upload-change': [files: UploadUserFile[]]
+  'upload-success': [fileData: any]
 }>()
 
 // 状态
@@ -355,11 +356,25 @@ const startUpload = async () => {
           body: formData,
         })
 
-        const result: { code: number; message?: string } = await response.json()
+        const result: { code: number; data?: any; message?: string } = await response.json()
+
+        console.log('后端完整响应:', result)
+        console.log('result.code:', result.code)
+        console.log('result.data:', result.data)
+        console.log('result.message:', result.message)
 
         if (result.code === 200) {
           currentSuccessFiles.push(file)
           ElMessage.success(`${file.name} 上传成功`)
+
+          // 发送 upload-success 事件，传递后端返回的文件数据（包含 uploadToken）
+          if (result.data) {
+            console.log('上传成功，文件数据:', result.data)
+            console.log('文件数据中的 uploadToken:', result.data.uploadToken)
+            emit('upload-success', result.data)
+          } else {
+            console.warn('result.data 为空，可能是后端未返回数据')
+          }
         } else {
           ElMessage.error(`${file.name}: ${result.message || '上传失败'}`)
           file.status = 'fail'
@@ -393,9 +408,14 @@ const handleProgress = (_event: ProgressEvent, file: UploadUserFile) => {
 }
 
 // 上传成功
-const handleSuccess = (response: { code: number }, file: UploadUserFile) => {
+const handleSuccess = (response: { code: number; data?: any }, file: UploadUserFile) => {
   if (response.code === 200) {
     file.status = 'success'
+
+    // 将上传文件信息（包含uploadToken）传递给父组件
+    if (response.data) {
+      emit('upload-success', response.data)
+    }
   } else {
     file.status = 'fail'
   }

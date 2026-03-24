@@ -133,4 +133,10 @@ public class File {
      */
     @TableField(value = "deleted")
     private Integer deleted;
+
+    /**
+     * 上传令牌（用于免登录验证上传者身份）
+     */
+    @TableField(value = "upload_token")
+    private String uploadToken;
 }

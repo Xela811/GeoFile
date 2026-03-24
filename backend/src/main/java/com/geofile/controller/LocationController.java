@@ -109,8 +109,11 @@ public class LocationController {
             Long userId = System.currentTimeMillis();
             locationData.put("userId", userId);
 
-            // 搜索附近文件
-            List<FileVO> files = fileLocationService.searchNearbyFiles(lat, lng, radius, excludeFileId);
+            // 搜索附近文件（向后兼容，不传分页和搜索参数）
+            List<FileVO> files = fileLocationService.searchNearbyFiles(
+                lat, lng, radius, excludeFileId,
+                1, 100, "upload_time", "DESC", null, null
+            );
 
             Map<String, Object> result = new HashMap<>();
             result.put("location", locationData);

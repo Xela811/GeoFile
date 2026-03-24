@@ -18,6 +18,7 @@
       :limit="10"
       tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 100MB"
       @success="handleUploadSuccess"
+      @upload-success="handleFileUploadSuccess"
       @error="handleUploadError"
     >
       <template #success="{ files }">
@@ -76,10 +77,52 @@ const goHome = () => {
   router.push('/')
 }
 
-// 上传成功
+// 上传成功（保存上传令牌）
 const handleUploadSuccess = (files: UploadUserFile[]) => {
   console.log('上传成功:', files)
   ElMessage.success(`成功上传 ${files.length} 个文件`)
+}
+
+// 上传成功回调（包含 uploadToken）
+const handleFileUploadSuccess = (fileData: any) => {
+  console.log('收到上传文件数据:', fileData)
+
+  if (fileData && fileData.id && fileData.uploadToken) {
+    // 保存上传令牌到 localStorage
+    saveUploadToken(fileData.id, fileData.uploadToken)
+    ElMessage.success('文件上传成功并已保存操作令牌')
+  } else {
+    console.warn('上传文件数据不完整:', fileData)
+  }
+}
+
+// 保存上传令牌
+const saveUploadToken = (fileId: number, uploadToken: string) => {
+  try {
+    const myFiles = getMyUploadedFiles()
+    myFiles[fileId] = uploadToken
+    localStorage.setItem('myUploadedFiles', JSON.stringify(myFiles))
+    console.log('已保存上传令牌:', fileId, uploadToken)
+  } catch (e) {
+    console.error('保存上传令牌失败:', e)
+  }
+}
+
+// 获取我上传的文件列表
+const getMyUploadedFiles = (): Record<number, string> => {
+  try {
+    const stored = localStorage.getItem('myUploadedFiles')
+    return stored ? JSON.parse(stored) : {}
+  } catch (e) {
+    console.error('获取上传文件列表失败:', e)
+    return {}
+  }
+}
+
+// 检查是否是文件上传者
+const isFileOwner = (fileId: number): boolean => {
+  const myFiles = getMyUploadedFiles()
+  return !!myFiles[fileId]
 }
 
 // 上传失败
