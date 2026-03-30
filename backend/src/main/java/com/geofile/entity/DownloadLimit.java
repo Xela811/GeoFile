@@ -32,8 +32,8 @@ public class DownloadLimit {
     private Integer maxDownloads;
 
     /**
-     * 有效时长(小时)
+     * 有效时长(分钟)
      */
-    @TableField(value = "valid_hours")
-    private Integer validHours;
+    @TableField(value = "valid_minutes")
+    private Integer validMinutes;
 }

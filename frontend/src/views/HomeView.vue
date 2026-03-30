@@ -251,15 +251,101 @@
             <el-descriptions-item label="有效期至">{{
               selectedFile.expireTime
             }}</el-descriptions-item>
-            <el-descriptions-item label="下载次数">{{
-              selectedFile.downloadCount || 0
-            }}</el-descriptions-item>
+
+            <!-- 下载次数显示 -->
+            <el-descriptions-item label="已下载次数">
+              <span style="font-weight: bold; color: #409eff">
+                {{ selectedFile.downloadCount || 0 }} 次
+              </span>
+            </el-descriptions-item>
+
+            <!-- 下载次数限制显示 -->
+            <el-descriptions-item label="下载次数上限">
+              <span
+                v-if="selectedFile.maxDownloads && selectedFile.maxDownloads > 0"
+                style="color: #67c23a"
+              >
+                {{ selectedFile.maxDownloads }} 次
+              </span>
+              <span v-else style="color: #909399"> 不限制 </span>
+            </el-descriptions-item>
+
+            <!-- 下载次数状态 -->
+            <el-descriptions-item label="下载状态">
+              <div v-if="isFileExpiredRealtime">
+                <el-progress :percentage="100" status="exception" :stroke-width="8" />
+                <div style="margin-top: 8px">
+                  <el-alert
+                    title="文件已过有效期 (已失效)"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                    description="该文件的安全访问期限已截止，无法继续下载。"
+                  />
+                </div>
+              </div>
+
+              <div v-else-if="Number(selectedFile.maxDownloads || 0) > 0">
+                <el-progress
+                  :percentage="calculateDownloadProgress()"
+                  :status="getDownloadProgressStatus()"
+                  :stroke-width="8"
+                >
+                  <template #default="{ percentage }">
+                    <span
+                      :style="{
+                        color: getDownloadProgressStatus() === 'exception' ? '#F56C6C' : '#409EFF',
+                      }"
+                    >
+                      {{ percentage }}%
+                    </span>
+                  </template>
+                </el-progress>
+                <div
+                  v-if="!isMaxedOut && countdownText"
+                  style="
+                    margin-top: 8px;
+                    color: #e6a23c;
+                    font-size: 13px;
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                  "
+                >
+                  <el-icon><Timer /></el-icon> {{ countdownText }}
+                </div>
+                <div v-if="isMaxedOut" style="margin-top: 8px">
+                  <el-alert title="已达到下载上限" type="error" :closable="false" show-icon />
+                </div>
+                <div v-else style="margin-top: 8px">
+                  <el-alert
+                    :title="
+                      '还可下载 ' +
+                      (selectedFile.maxDownloads - (selectedFile.downloadCount || 0)) +
+                      ' 次'
+                    "
+                    type="success"
+                    :closable="false"
+                    show-icon
+                  />
+                </div>
+              </div>
+              <div v-else style="color: #909399">
+                <el-icon><Download /></el-icon>
+                不限制下载次数
+              </div>
+            </el-descriptions-item>
           </el-descriptions>
 
           <div class="file-actions-dialog">
-            <el-button type="primary" size="large" @click="downloadFile">
+            <el-button
+              type="primary"
+              size="large"
+              @click="downloadFile"
+              :disabled="isFileExpiredRealtime || isMaxedOut"
+            >
               <el-icon><Download /></el-icon>
-              下载文件
+              {{ isFileExpiredRealtime ? '文件已过期' : isMaxedOut ? '下载次数已满' : '下载文件' }}
             </el-button>
             <el-button size="large" @click="copyFileLink">
               <el-icon><Link /></el-icon>
@@ -282,7 +368,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -297,6 +383,7 @@ import {
   VideoCamera,
   Headset,
   Delete,
+  Timer,
 } from '@element-plus/icons-vue'
 import FileUpload from '@/components/FileUpload.vue'
 import locationService, { LocationInfo, NearbyFile } from '@/services/locationService'
@@ -565,7 +652,7 @@ const handleDeleteFile = async (file: NearbyFile) => {
       localStorage.setItem('myUploadedFiles', JSON.stringify(myFiles))
 
       // 从文件列表中移除
-      nearbyFiles.value = nearbyFiles.value.filter(f => f.id !== file.id)
+      nearbyFiles.value = nearbyFiles.value.filter((f) => f.id !== file.id)
 
       // 关闭详情对话框（如果正在查看该文件）
       if (selectedFile.value && selectedFile.value.id === file.id) {
@@ -594,18 +681,93 @@ const viewFileDetail = (file: NearbyFile) => {
 }
 
 // 下载文件
-const downloadFile = () => {
-  if (!selectedFile.value) return
+const downloadFile = async () => {
+  // 1. 基础校验
+  if (!selectedFile.value) {
+    ElMessage.warning('请先选择一个文件')
+    return
+  }
 
-  const url = `/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  // 2. 直接从当前选中的文件对象中获取 token
+  const token = selectedFile.value.downloadToken
 
-  // 创建下载链接
-  const a = document.createElement('a')
-  a.href = url
-  a.download = selectedFile.value.fileName
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  if (!token) {
+    ElMessage.error('该文件缺少下载凭证，请刷新列表重试')
+    return
+  }
+
+  try {
+    ElMessage.success('开始下载文件...')
+
+    // 3. 使用 fetch 获取文件，这样可以捕获错误
+    const response = await fetch(`/api/file/download/${selectedFile.value.id}?token=${token}`)
+
+    if (!response.ok) {
+      // 处理 HTTP 错误状态码
+      const errorData = await response.json().catch(() => null)
+
+      if (response.status === 400) {
+        ElMessage.error(errorData?.message || '文件已过期或无效，无法下载')
+      } else if (response.status === 404) {
+        ElMessage.error('文件不存在')
+      } else {
+        ElMessage.error(`下载失败: ${response.status} ${response.statusText}`)
+      }
+      return
+    }
+
+    // 4. 获取文件 blob
+    const blob = await response.blob()
+
+    // 5. 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = selectedFile.value.fileName || 'file'
+    document.body.appendChild(a)
+    a.click()
+
+    // 6. 清理
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+
+    ElMessage.success('下载成功')
+
+    // 7. 下载成功后重新获取文件列表，更新下载次数
+    //await handleSearch()
+    // --- 核心修改部分 ---
+
+    // 1. 前端先行：立刻让界面上的次数 +1
+    // 这样进度条和描述项会瞬间更新，不会出现“变为0”的情况
+    if (selectedFile.value.downloadCount !== undefined) {
+      selectedFile.value.downloadCount += 1
+    } else {
+      selectedFile.value.downloadCount = 1
+    }
+
+    ElMessage.success('下载成功')
+
+    // 2. 延迟同步：给后端数据库写入留出 1 秒缓冲时间，再刷新列表
+    // 这样可以避免 handleSearch 拿到还没更新完的旧数据（或 0）
+    setTimeout(() => {
+      handleSearch()
+    }, 1000)
+  } catch (error: any) {
+    console.error('下载文件失败:', error)
+
+    // 检查是否是过期错误
+    if (
+      error.message &&
+      error.message.includes('network') &&
+      error.message.includes('failed to fetch')
+    ) {
+      ElMessage.error('网络请求失败，请检查网络连接')
+    } else if (error.message && error.message.includes('expired')) {
+      ElMessage.error('文件已过期，无法下载')
+    } else {
+      ElMessage.error('下载失败: ' + (error.message || '未知错误'))
+    }
+  }
 }
 
 // 复制文件链接
@@ -650,6 +812,84 @@ const formatDistance = (meters: number): string => {
   return (meters / 1000).toFixed(2) + 'km'
 }
 
+// 计算下载进度
+/*const calculateDownloadProgress = (): number => {
+  if (
+    !selectedFile.value ||
+    !selectedFile.value.maxDownloads ||
+    selectedFile.value.maxDownloads === 0
+  ) {
+    return 0
+  }
+  const current = selectedFile.value.downloadCount || 0
+  const max = selectedFile.value.maxDownloads
+  return Math.round((current / max) * 100)
+}*/
+
+// 获取下载进度状态
+/*const getDownloadProgressStatus = (): string | undefined => {
+  if (
+    !selectedFile.value ||
+    !selectedFile.value.maxDownloads ||
+    selectedFile.value.maxDownloads === 0
+  ) {
+    return undefined
+  }
+  const current = selectedFile.value.downloadCount || 0
+  const max = selectedFile.value.maxDownloads
+  return current >= max ? 'exception' : undefined
+}*/
+// 1. 判断是否过期 (增加严格的 null/undefined 检查和格式兼容)
+const isExpired = () => {
+  // 必须确保 selectedFile 及其 expireTime 存在且不是空字符串
+  if (!selectedFile.value || !selectedFile.value.expireTime) return false
+
+  try {
+    // 兼容 iOS/Safari 的日期格式 (将 - 替换为 /)
+    const expireStr = selectedFile.value.expireTime.replace(/-/g, '/')
+    const expireDate = new Date(expireStr)
+
+    // 如果日期解析失败，返回 false 防止误杀
+    if (isNaN(expireDate.getTime())) return false
+
+    return new Date() > expireDate
+  } catch (e) {
+    return false
+  }
+}
+
+// 2. 修改进度条状态逻辑 (增加对 undefined 的防御)
+const getDownloadProgressStatus = () => {
+  // 优先级 1: 过期判断
+  if (isExpired()) return 'exception' // 红色
+
+  const file = selectedFile.value
+  if (!file) return 'success'
+
+  // 优先级 2: 次数判断 (将 undefined 视为 0)
+  const max = Number(file.maxDownloads || 0)
+  const current = Number(file.downloadCount || 0)
+
+  if (max > 0 && current >= max) {
+    return 'exception' // 红色
+  }
+
+  return 'success' // 绿色
+}
+
+// 3. 计算百分比 (增加对 undefined 的防御)
+const calculateDownloadProgress = () => {
+  if (isExpired()) return 100 // 过期直接满进度条变红
+
+  const file = selectedFile.value
+  if (!file || !file.maxDownloads || file.maxDownloads <= 0) return 0
+
+  const current = Number(file.downloadCount || 0)
+  const max = Number(file.maxDownloads)
+  const percent = Math.round((current / max) * 100)
+  return percent > 100 ? 100 : percent
+}
+
 // 监听模式切换
 watch(useFixedCoordinates, (newVal) => {
   if (newVal) {
@@ -679,6 +919,64 @@ const handleResetSearch = () => {
   paginationInfo.value.pageNum = 1
   handleSearch()
 }
+
+// 1. 定义一个实时更新的当前时间戳
+const nowTimestamp = ref(Date.now())
+let timer: any = null
+
+// 2. 增强版的过期判断（将你原有的逻辑改为依赖 nowTimestamp）
+// 注意：这里我们把它改成一个变量，这样 Vue 就能实时追踪它
+const isFileExpiredRealtime = computed(() => {
+  if (!selectedFile.value || !selectedFile.value.expireTime) return false
+
+  try {
+    const expireStr = selectedFile.value.expireTime.replace(/年|月/g, '/').replace(/日/g, '').trim()
+    const expireDate = new Date(expireStr)
+    if (isNaN(expireDate.getTime())) return false
+
+    // 核心修改：使用 nowTimestamp.value 进行对比，实现“挂机自动变红”
+    return nowTimestamp.value > expireDate.getTime()
+  } catch (e) {
+    return false
+  }
+})
+
+// 3. 倒计时计算属性
+const countdownText = computed(() => {
+  // 如果已过期或已达上限，直接返回空，不显示倒计时
+  if (isFileExpiredRealtime.value || isMaxedOut.value) return ''
+
+  if (!selectedFile.value?.expireTime) return ''
+
+  const expireStr = selectedFile.value.expireTime.replace(/年|月/g, '/').replace(/日/g, '').trim()
+  const expireDate = new Date(expireStr).getTime()
+
+  const diff = Math.floor((expireDate - nowTimestamp.value) / 1000)
+  if (diff <= 0) return ''
+
+  const h = Math.floor(diff / 3600)
+  const m = Math.floor((diff % 3600) / 60)
+  const s = diff % 60
+  return `剩余有效期：${h > 0 ? h + '时' : ''}${m}分${s}秒`
+})
+
+// 4. 判断次数是否超限
+const isMaxedOut = computed(() => {
+  const file = selectedFile.value
+  if (!file || !file.maxDownloads || file.maxDownloads <= 0) return false
+  return (file.downloadCount || 0) >= file.maxDownloads
+})
+
+// 5. 管理定时器
+onMounted(() => {
+  timer = setInterval(() => {
+    nowTimestamp.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 
 // 初始化
 onMounted(() => {

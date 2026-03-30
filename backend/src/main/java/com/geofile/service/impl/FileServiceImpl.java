@@ -4,12 +4,15 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.OrderItem;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.geofile.entity.DownloadLimit;
 import com.geofile.entity.File;
 import com.geofile.entity.FileVO;
 import com.geofile.service.FileService;
+import com.geofile.service.DownloadLimitService;
 import com.geofile.mapper.FileMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.text.SimpleDateFormat;
@@ -26,7 +29,10 @@ import java.util.Date;
 @Slf4j
 @Service
 public class FileServiceImpl extends ServiceImpl<FileMapper, File>
-    implements FileService{
+    implements FileService {
+
+    @Autowired
+    private DownloadLimitService downloadLimitService;
 
     @Override
     public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
@@ -205,7 +211,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
         //vo.setUploadTime(file.getUploadTime().toString());
         //vo.setExpireTime(file.getExpireTime().toString());
         // 定义中文格式：年-月-日 时:分
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy年MM月dd日 HH:mm");
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
         // 处理上传时间
         if (file.getUploadTime() != null) {
@@ -216,11 +222,24 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
         if (file.getExpireTime() != null) {
             vo.setExpireTime(sdf.format(file.getExpireTime()));
         } else {
-            vo.setExpireTime("永久有效");
+            vo.setExpireTime(null);
         }
 
         // 确保下载次数被赋值（如果 BeanUtils 没拷过去的话）
         vo.setDownloadCount(file.getDownloadCount() != null ? file.getDownloadCount() : 0);
+
+        // 设置下载次数上限
+        DownloadLimit downloadLimit = downloadLimitService.getOne(
+                new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, file.getId())
+        );
+
+        if (downloadLimit != null) {
+            // 填充最大下载次数
+            vo.setMaxDownloads(downloadLimit.getMaxDownloads());
+            // 如果需要显示有效小时，也可以在这里填充（前提是 FileVO 有这个字段）
+        } else {
+            vo.setMaxDownloads(0); // 数据库没记录，显式设为 0 表示不限制
+        }
         vo.setStatusText(file.getStatus() == 1 ? "正常" : "已删除");
         return vo;
     }

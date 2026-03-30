@@ -139,4 +139,16 @@ public class File {
      */
     @TableField(value = "upload_token")
     private String uploadToken;
+
+    /**
+     * 下载令牌（用于下载验证）
+     */
+    @TableField(value = "download_token")
+    private String downloadToken;
+
+    /**
+     * 下载限制ID（关联 t_download_limit 表）
+     */
+    @TableField(exist = false)
+    private Long downloadLimitId;
 }

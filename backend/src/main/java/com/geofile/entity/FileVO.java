@@ -96,4 +96,9 @@ public class FileVO {
      * 下载令牌
      */
     private String downloadToken;
+
+    /**
+     * 下载次数上限（0表示不限制）
+     */
+    private Integer maxDownloads;
 }

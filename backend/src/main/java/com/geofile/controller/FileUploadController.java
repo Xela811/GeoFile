@@ -9,10 +9,21 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+
+import org.springframework.core.io.ByteArrayResource;
 
 /**
  * 文件上传Controller
@@ -32,11 +43,15 @@ public class FileUploadController {
      */
     @PostMapping("/upload")
     @Operation(summary = "上传单个文件", description = "支持大文件上传，包含进度显示")
-    public Result<FileVO> uploadFile(@RequestParam("file") MultipartFile file) {
+    public Result<FileVO> uploadFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false, defaultValue = "0") Integer maxDownloads,
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
         try {
-            log.info("文件上传开始: {}", file.getOriginalFilename());
+            log.info("文件上传开始: {}, 下载限制: {}次, 有效时长: {}分钟",
+                    file.getOriginalFilename(), maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file);
+            FileVO result = fileUploadService.uploadFile(file, maxDownloads, validMinutes);
 
             return Result.success(result);
 
@@ -53,6 +68,8 @@ public class FileUploadController {
      * @param lat 纬度
      * @param lng 经度
      * @param radius 搜索半径（米）
+     * @param maxDownloads 最大下载次数
+     * @param validMinutes 有效时长（分钟）
      * @return 文件信息
      */
     @PostMapping("/upload-with-location")
@@ -61,12 +78,14 @@ public class FileUploadController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
-            @RequestParam(required = false) Integer radius) {
+            @RequestParam(required = false) Integer radius,
+            @RequestParam(required = false, defaultValue = "0") Integer maxDownloads,
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
         try {
-            log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}",
-                    file.getOriginalFilename(), lat, lng, radius);
+            log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
+                    file.getOriginalFilename(), lat, lng, radius, maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius);
+            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes);
 
             return Result.success(result);
 
@@ -110,12 +129,14 @@ public class FileUploadController {
             @RequestParam("files") MultipartFile[] files,
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
-            @RequestParam(required = false) Integer radius) {
+            @RequestParam(required = false) Integer radius,
+            @RequestParam(required = false, defaultValue = "1") Integer maxDownloads,
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
         try {
-            log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}",
-                    files.length, lat, lng, radius);
+            log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
+                    files.length, lat, lng, radius, maxDownloads, validMinutes);
 
-            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius);
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes);
 
             return Result.success(results);
 
@@ -191,6 +212,78 @@ public class FileUploadController {
         } catch (Exception e) {
             log.error("合并分片失败: {}", fileName, e);
             return Result.error("合并分片失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 下载文件
+     */
+    @GetMapping("/download/{fileId}")
+    @Operation(summary = "下载文件", description = "通过下载令牌验证后下载文件")
+    public ResponseEntity<Resource> downloadFile(
+            @PathVariable Long fileId,
+            @RequestParam String token) {
+
+        try {
+            log.info("请求下载文件: fileId={}, token={}", fileId, token);
+
+            // 1. 验证并获取文件
+            com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token);
+
+            // 2. 构建文件路径
+            File filePath = new File(file.getFilePath());
+            if (!filePath.exists()) {
+                log.warn("文件不存在: {}", file.getFilePath());
+                return ResponseEntity.notFound().build();
+            }
+
+            // 3. 读取文件内容
+            FileInputStream fis = new FileInputStream(filePath);
+            byte[] fileContent = new byte[(int) filePath.length()];
+            fis.read(fileContent);
+            fis.close();
+
+            // 4. 设置响应头
+            String encodedFileName = URLEncoder.encode(file.getOriginalName(), StandardCharsets.UTF_8)
+                    .replaceAll("\\+", "%20");
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            headers.setContentLength(file.getFileSize());
+            headers.setContentDispositionFormData("attachment", encodedFileName);
+
+            log.info("文件下载成功: {}, 大小: {} bytes", file.getFileName(), file.getFileSize());
+
+            // 5. 返回文件内容
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(new ByteArrayResource(fileContent));
+
+        } catch (IllegalArgumentException e) {
+            log.error("下载失败: fileId={}, error={}", fileId, e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } catch (Exception e) {
+            log.error("下载文件失败: fileId={}", fileId, e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /**
+     * 生成下载令牌（用于前端获取下载链接）
+     */
+    @GetMapping("/generate-download-token/{fileId}")
+    @Operation(summary = "生成下载令牌", description = "为文件生成下载令牌")
+    public Result<String> generateDownloadToken(@PathVariable Long fileId) {
+        try {
+            log.info("生成下载令牌: fileId={}", fileId);
+
+            String token = fileUploadService.generateDownloadToken(fileId);
+
+            return Result.success(token);
+
+        } catch (Exception e) {
+            log.error("生成下载令牌失败: fileId={}", fileId, e);
+            return Result.error("生成下载令牌失败: " + e.getMessage());
         }
     }
 }

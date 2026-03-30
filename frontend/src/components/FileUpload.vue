@@ -167,6 +167,8 @@ interface Props {
   showActions?: boolean
   accept?: string
   tip?: string
+  maxDownloads?: number // 最大下载次数
+  validMinutes?: number // 有效时长（分钟）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -178,6 +180,8 @@ const props = withDefaults(defineProps<Props>(), {
   showActions: true,
   accept: '',
   tip: '支持 JPG、PNG、PDF、DOC、TXT 等格式，单个文件不超过 100MB',
+  maxDownloads: 1,
+  validMinutes: 30,
 })
 
 const emit = defineEmits<{
@@ -185,6 +189,7 @@ const emit = defineEmits<{
   error: [error: Error]
   'upload-change': [files: UploadUserFile[]]
   'upload-success': [fileData: any]
+  'require-limit-config': []
 }>()
 
 // 状态
@@ -273,6 +278,12 @@ const startUpload = async () => {
     return
   }
 
+  // 检查是否需要配置下载限制
+  if (props.maxDownloads === 0 || props.validMinutes === 0) {
+    emit('require-limit-config')
+    return
+  }
+
   isUploading.value = true
 
   try {
@@ -300,7 +311,7 @@ const startUpload = async () => {
     }
 
     // 获取Token
-    const tokenRes = await fetch('/api/verification/token/download')
+    const tokenRes = await fetch('/api/file/generate-download-token/{fileId}')
     const { data: token } = await tokenRes.json()
 
     // 决定使用哪个上传接口
@@ -332,12 +343,16 @@ const startUpload = async () => {
           uploadLat = FIXED_LAT
           uploadLng = FIXED_LNG
           uploadRadius = 1000 // 固定模式使用默认1000米
-          console.log('使用固定坐标添加到表单:', { lat: uploadLat, lng: uploadLng, radius: uploadRadius })
+          console.log('使用固定坐标添加到表单:', {
+            lat: uploadLat,
+            lng: uploadLng,
+            radius: uploadRadius,
+          })
         } else if (locationData) {
           console.log('添加位置参数到表单:', {
             lat: locationData.lat,
             lng: locationData.lng,
-            radius: locationData.radius
+            radius: locationData.radius,
           })
         }
 
@@ -345,6 +360,18 @@ const startUpload = async () => {
           formData.append('lat', uploadLat.toString())
           formData.append('lng', uploadLng.toString())
           formData.append('radius', uploadRadius.toString())
+        }
+
+        // 添加下载限制参数
+        if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
+          formData.append('maxDownloads', props.maxDownloads.toString())
+          console.log('添加下载限制到表单:', { maxDownloads: props.maxDownloads })
+        }
+
+        // 添加有效时长参数（分钟）
+        if (props.validMinutes !== undefined && props.validMinutes > 0) {
+          formData.append('validMinutes', props.validMinutes.toString())
+          console.log('添加有效时长到表单:', { validMinutes: props.validMinutes })
         }
 
         // 上传文件

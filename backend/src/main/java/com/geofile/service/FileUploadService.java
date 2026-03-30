@@ -1,5 +1,6 @@
 package com.geofile.service;
 
+import com.geofile.entity.File;
 import com.geofile.entity.FileVO;
 import com.geofile.entity.UploadInfo;
 import com.geofile.entity.UploadProgress;
@@ -16,15 +17,17 @@ public interface FileUploadService {
     /**
      * 上传单个文件
      * @param file 上传的文件
+     * @param maxDownloads 最大下载次数
+     * @param validMinutes 有效时长（分钟）
      * @return 文件信息
      */
-    FileVO uploadFile(MultipartFile file);
+    FileVO uploadFile(MultipartFile file, Integer maxDownloads, Integer validMinutes);
 
     @Transactional
-    FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius);
+    FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius,
+                      Integer maxDownloads, Integer validMinutes);
 
-
-    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius);
+    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes);
     /**
      * 上传多个文件
      * @param files 上传的文件列表
@@ -61,4 +64,19 @@ public interface FileUploadService {
      * @return 合并后的文件信息
      */
     FileVO mergeChunks(String fileName, int totalChunks, String fileHash);
+
+    /**
+     * 下载文件
+     * @param fileId 文件ID
+     * @param downloadToken 下载令牌
+     * @return 文件信息
+     */
+    File downloadFile(Long fileId, String downloadToken);
+
+    /**
+     * 生成下载令牌
+     * @param fileId 文件ID
+     * @return 下载令牌
+     */
+    String generateDownloadToken(Long fileId);
 }

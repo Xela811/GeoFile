@@ -11,15 +11,25 @@
     </div>
 
     <!-- 可复用上传组件 -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px">
+      <h2 style="margin: 0">文件列表</h2>
+      <el-button type="primary" :icon="Back" @click="showLimitDialog">
+        设置下载限制
+      </el-button>
+    </div>
+
     <FileUpload
       ref="uploadRef"
       title="上传文件"
       :multiple="true"
       :limit="10"
+      :max-downloads="downloadLimitConfig.maxDownloads"
+      :valid-minutes="downloadLimitConfig.validMinutes"
       tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 100MB"
       @success="handleUploadSuccess"
       @upload-success="handleFileUploadSuccess"
       @error="handleUploadError"
+      @require-limit-config="handleRequireLimitConfig"
     >
       <template #success="{ files }">
         <el-alert
@@ -38,6 +48,63 @@
         </el-alert>
       </template>
     </FileUpload>
+
+    <!-- 下载限制配置对话框 -->
+    <el-dialog
+      v-model="showDownloadLimitDialog"
+      title="下载限制配置"
+      width="500px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="120px">
+        <el-form-item label="下载次数限制">
+          <el-radio-group v-model="downloadLimitConfig.maxDownloads">
+            <el-radio :value="1">1次</el-radio>
+            <el-radio :value="5">5次</el-radio>
+            <el-radio :value="10">10次</el-radio>
+            <el-radio :value="50">50次</el-radio>
+            <el-radio :value="100">100次</el-radio>
+          </el-radio-group>
+          <el-input-number
+            v-model="downloadLimitConfig.maxDownloads"
+            :min="1"
+            :max="9999"
+            style="margin-left: 12px; width: 150px"
+          />
+        </el-form-item>
+
+        <el-form-item label="有效时长">
+          <el-radio-group v-model="downloadLimitConfig.validMinutes">
+            <el-radio :value="5">5分钟</el-radio>
+            <el-radio :value="10">10分钟</el-radio>
+            <el-radio :value="30">30分钟</el-radio>
+            <el-radio :value="60">1小时</el-radio>
+            <el-radio :value="1440">1天</el-radio>
+          </el-radio-group>
+          <el-input-number
+            v-model="downloadLimitConfig.validMinutes"
+            :min="1"
+            :max="525600"
+            style="margin-left: 12px; width: 150px"
+          />
+          <span style="margin-left: 12px; color: #909399; font-size: 12px">分钟</span>
+        </el-form-item>
+
+        <el-form-item label="配置说明">
+          <el-alert
+            :title="getLimitDescription()"
+            type="info"
+            :closable="false"
+            show-icon
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="showDownloadLimitDialog = false">取消</el-button>
+        <el-button type="primary" @click="confirmDownloadLimit">确定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 快捷操作 -->
     <!--<div class="quick-actions">
@@ -69,12 +136,47 @@ import FileUpload from '@/components/FileUpload.vue'
 
 const router = useRouter()
 const uploadRef = ref<InstanceType<typeof FileUpload>>()
-uploadRef.value?.clear() // 清空列表
-uploadRef.value?.startUpload() // 开始上传
+
+// 下载限制配置
+const showDownloadLimitDialog = ref(false)
+const downloadLimitConfig = ref({
+  maxDownloads: 1,
+  validMinutes: 30, // 默认30分钟
+})
 
 // 返回首页
 const goHome = () => {
   router.push('/')
+}
+
+// 显示下载限制配置对话框
+const showLimitDialog = () => {
+  showDownloadLimitDialog.value = true
+}
+
+// 确认下载限制配置
+const confirmDownloadLimit = () => {
+  const maxDesc = `最多下载 ${downloadLimitConfig.value.maxDownloads} 次`
+  const minutesDesc = `${downloadLimitConfig.value.validMinutes} 分钟`
+
+  ElMessage.success(`下载限制已设置: ${maxDesc}, ${minutesDesc}`)
+  showDownloadLimitDialog.value = false
+}
+
+// 获取限制说明
+const getLimitDescription = () => {
+  const maxDesc = `最多下载 ${downloadLimitConfig.value.maxDownloads} 次，超过后无法下载`
+
+  const minutes = downloadLimitConfig.value.validMinutes
+
+  let timeDesc
+  if (minutes === 0) {
+    timeDesc = '文件永久有效'
+  } else {
+    timeDesc = `文件有效期 ${minutes} 分钟`
+  }
+
+  return `${maxDesc}，${timeDesc}`
 }
 
 // 上传成功（保存上传令牌）
@@ -94,6 +196,11 @@ const handleFileUploadSuccess = (fileData: any) => {
   } else {
     console.warn('上传文件数据不完整:', fileData)
   }
+}
+
+// 监听需要配置下载限制的事件
+const handleRequireLimitConfig = () => {
+  showDownloadLimitDialog.value = true
 }
 
 // 保存上传令牌

@@ -1,13 +1,8 @@
 package com.geofile.service.impl;
 
-import com.geofile.entity.File;
-import com.geofile.entity.FileVO;
-import com.geofile.entity.UploadInfo;
-import com.geofile.entity.UploadProgress;
-import com.geofile.service.FileLocationService;
-import com.geofile.service.FileService;
-import com.geofile.service.FileStorageService;
-import com.geofile.service.FileUploadService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.geofile.entity.*;
+import com.geofile.service.*;
 import com.geofile.util.FileValidator;
 import com.geofile.util.JwtUtil;
 import com.geofile.util.RedisUtil;
@@ -64,11 +59,16 @@ public class FileUploadServiceImpl implements FileUploadService {
     private static final String CHUNK_PREFIX = "chunk:";
     private static final int CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
 
+    @Autowired
+    private DownloadLimitService downloadLimitService;
+
+
+
     @Override
     @Transactional
-    public FileVO uploadFile(MultipartFile file) {
+    public FileVO uploadFile(MultipartFile file, Integer maxDownloads, Integer validMinutes) {
         // 调用带位置参数的版本，位置为空
-        return uploadFile(file, null, null, null);
+        return uploadFile(file, null, null, null, maxDownloads, validMinutes);
     }
 
     /**
@@ -78,11 +78,14 @@ public class FileUploadServiceImpl implements FileUploadService {
      * @param lat 纬度
      * @param lng 经度
      * @param radius 搜索半径（米）
+     * @param maxDownloads 最大下载次数
+     * @param validMinutes 有效时长（分钟）
      * @return 文件信息
      */
     @Transactional
     @Override
-    public FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius) {
+    public FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius,
+                             Integer maxDownloads, Integer validMinutes) {
         try {
             // 1. 验证文件
             String originalFilename = file.getOriginalFilename();
@@ -96,7 +99,17 @@ public class FileUploadServiceImpl implements FileUploadService {
             // 2. 保存文件
             String filePath = fileStorageService.saveFile(file);
 
-            // 3. 生成文件信息
+            // 3. 计算过期时间（默认30分钟，如果设置了有效时长则使用设置值）
+            Date expireTime;
+            if (validMinutes != null && validMinutes > 0) {
+                expireTime = Date.from(LocalDateTime.now().plusMinutes(validMinutes).atZone(ZoneId.systemDefault()).toInstant());
+                log.info("使用自定义有效时长: {} 分钟", validMinutes);
+            } else {
+                expireTime = Date.from(LocalDateTime.now().plusMinutes(30).atZone(ZoneId.systemDefault()).toInstant());
+                log.info("使用默认有效时长: 30 分钟");
+            }
+
+            // 4. 生成文件信息
             File fileEntity = new File();
             fileEntity.setFileName(originalFilename);
             fileEntity.setFileType(getFileExtension(originalFilename));
@@ -107,13 +120,37 @@ public class FileUploadServiceImpl implements FileUploadService {
             fileEntity.setUploadTime(Date.from(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant()));
             fileEntity.setStatus(1);
             fileEntity.setDownloadCount(0);
-            fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusDays(30).atZone(ZoneId.systemDefault()).toInstant())); // 默认30天有效期
+            fileEntity.setExpireTime(expireTime);
 
             // 生成上传令牌（用于免登录身份验证）
             String uploadToken = generateUploadToken();
             fileEntity.setUploadToken(uploadToken);
 
-            // 4. 设置地理位置信息
+            // 生成下载令牌（用于下载验证）
+            String downloadToken = generateDownloadToken(fileEntity.getId());
+            fileEntity.setDownloadToken(downloadToken);
+
+            fileService.save(fileEntity);
+
+            // 5. 处理下载限制
+            if (maxDownloads != null && maxDownloads > 0) {
+                // 创建下载限制记录
+                DownloadLimit downloadLimit = new DownloadLimit();
+                downloadLimit.setFileId(fileEntity.getId());
+                downloadLimit.setMaxDownloads(maxDownloads);
+                downloadLimit.setValidMinutes(validMinutes != null ? validMinutes : 30); // 默认30分钟
+
+                downloadLimitService.save(downloadLimit);
+
+                // 设置关联ID
+                fileEntity.setDownloadLimitId(downloadLimit.getId());
+                log.info("已创建下载限制: 文件ID={}, 最大下载次数={}, 有效时长={}分钟",
+                        fileEntity.getId(), maxDownloads, downloadLimit.getValidMinutes());
+            } else {
+                log.info("文件上传成功（不限制下载次数）: {}", originalFilename);
+            }
+
+            // 6. 设置地理位置信息
             if (lat != null && lng != null) {
                 fileEntity.setLocationLat(lat);
                 fileEntity.setLocationLng(lng);
@@ -123,12 +160,12 @@ public class FileUploadServiceImpl implements FileUploadService {
                 log.info("文件上传（无位置信息）: {}", originalFilename);
             }
 
-            // 5. 保存到数据库
-            fileService.save(fileEntity);
+            // 7. 保存到数据库
+            fileService.updateById(fileEntity);
 
             log.info("文件上传成功: {}", originalFilename);
 
-            // 6. 返回文件信息
+            // 8. 返回文件信息
             return convertToFileVO(fileEntity);
 
         } catch (IOException e) {
@@ -142,17 +179,18 @@ public class FileUploadServiceImpl implements FileUploadService {
     public List<FileVO> uploadFiles(List<MultipartFile> files) {
         return files.stream()
                 .filter(file -> !file.isEmpty())
-                .map(this::uploadFile)
+                .map(file -> this.uploadFile(file, null, null, null, 1, 30))
                 .collect(Collectors.toList());
     }
 
     /**
      * 批量上传文件并记录位置
      */
-    public List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius) {
+    @Override
+    public List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes) {
         return files.stream()
                 .filter(file -> !file.isEmpty())
-                .map(file -> uploadFile(file, lat, lng, radius))
+                .map(file -> uploadFile(file, lat, lng, radius, maxDownloads, validMinutes))
                 .collect(Collectors.toList());
     }
 
@@ -357,11 +395,24 @@ public class FileUploadServiceImpl implements FileUploadService {
         fileEntity.setUploadTime(Date.from(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant()));
         fileEntity.setStatus(1);
         fileEntity.setDownloadCount(0);
-        fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusDays(30).atZone(ZoneId.systemDefault()).toInstant()));
+        fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusMinutes(30).atZone(ZoneId.systemDefault()).toInstant())); // 默认30分钟
 
         // 生成上传令牌（用于免登录身份验证）
         String uploadToken = generateUploadToken();
         fileEntity.setUploadToken(uploadToken);
+
+        // 生成下载令牌（用于下载验证）
+        String downloadToken = generateDownloadToken(fileEntity.getId());
+        fileEntity.setDownloadToken(downloadToken);
+
+        // 处理下载限制（默认1次，30分钟）
+        DownloadLimit downloadLimit = new DownloadLimit();
+        downloadLimit.setFileId(fileEntity.getId());
+        downloadLimit.setMaxDownloads(1); // 默认1次
+        downloadLimit.setValidMinutes(30); // 默认30分钟
+        downloadLimitService.save(downloadLimit);
+
+        fileEntity.setDownloadLimitId(downloadLimit.getId());
 
         // 保存到数据库
         fileService.save(fileEntity);
@@ -374,6 +425,99 @@ public class FileUploadServiceImpl implements FileUploadService {
      */
     private String generateFileHash() {
         return UUID.randomUUID().toString();
+    }
+
+    @Override
+    public File downloadFile(Long fileId, String downloadToken) {
+        try {
+            // 1. 查询文件
+            File file = fileService.getById(fileId);
+            if (file == null) {
+                log.warn("文件不存在: fileId={}", fileId);
+                throw new IllegalArgumentException("文件不存在");
+            }
+
+            // 2. 验证下载令牌
+            if (file.getDownloadToken() == null || !file.getDownloadToken().equals(downloadToken)) {
+                log.warn("下载令牌验证失败: fileId={}, token={}", fileId, downloadToken);
+                throw new IllegalArgumentException("无效的下载令牌");
+            }
+
+            // 3. 检查文件状态
+            if (file.getStatus() != null && file.getStatus() == 0 && file.getDeleted() == 1) {
+                throw new IllegalArgumentException("文件已被删除");
+            }
+
+            // 4. 检查是否过期
+            if (file.getExpireTime() != null && file.getExpireTime().before(new Date())) {
+                throw new IllegalArgumentException("文件已过期");
+            }
+
+            // 5. 检查下载次数限制
+//            if (file.getDownloadLimitId() != null) {
+//                DownloadLimit downloadLimit = downloadLimitService.getById(file.getDownloadLimitId());
+//                if (downloadLimit != null) {
+//                    Integer maxDownloads = downloadLimit.getMaxDownloads();
+//                    if (maxDownloads != null && maxDownloads > 0) {
+//                        // 获取当前下载次数
+//                        Integer currentCount = file.getDownloadCount();
+//                        if (currentCount == null) {
+//                            currentCount = 0;
+//                        }
+//
+//                        // 检查是否超过限制
+//                        if (currentCount >= maxDownloads) {
+//                            log.warn("下载次数超限: fileId={}, 当前次数={}, 最大次数={}", fileId, currentCount, maxDownloads);
+//                            throw new IllegalArgumentException("下载次数已达上限，无法继续下载");
+//                        }
+//
+//                        log.info("下载次数检查通过: fileId={}, 当前次数={}, 最大次数={}", fileId, currentCount, maxDownloads);
+//                    }
+//                }
+//            }
+            DownloadLimit downloadLimit = downloadLimitService.getOne(
+                    new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
+            );
+
+            if (downloadLimit != null) {
+                Integer maxDownloads = downloadLimit.getMaxDownloads();
+                if (maxDownloads != null && maxDownloads > 0) {
+                    // 获取当前下载次数 (如果为 null 则视为 0)
+                    int currentCount = (file.getDownloadCount() == null) ? 0 : file.getDownloadCount();
+
+                    // 检查是否超过限制
+                    if (currentCount >= maxDownloads) {
+                        log.warn("下载次数超限: fileId={}, 当前次数={}, 最大次数={}", fileId, currentCount, maxDownloads);
+                        throw new IllegalArgumentException("该文件下载次数已达上限 (" + maxDownloads + "次)");
+                    }
+                    log.info("下载次数检查通过: fileId={}, 当前次数={}, 最大次数={}", fileId, currentCount, maxDownloads);
+                }
+            }
+
+            // 6. 更新下载次数
+            if (file.getDownloadCount() == null) {
+                file.setDownloadCount(0);
+            }
+            file.setDownloadCount(file.getDownloadCount() + 1);
+            fileService.updateById(file);
+
+            log.info("文件下载成功: fileId={}, fileName={}, 下载次数={}", fileId, file.getFileName(), file.getDownloadCount());
+
+            return file;
+
+        } catch (IllegalArgumentException e) {
+            log.error("文件下载失败: fileId={}, error={}", fileId, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("文件下载失败: fileId={}", fileId, e);
+            throw new RuntimeException("文件下载失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public String generateDownloadToken(Long fileId) {
+        String token = UUID.randomUUID().toString().replace("-", "");
+        return token;
     }
 
     /**
@@ -462,11 +606,26 @@ public class FileUploadServiceImpl implements FileUploadService {
         vo.setOriginalName(file.getOriginalName());
         vo.setStorageType(file.getStorageType());
         vo.setUploadTime(file.getUploadTime().toString());
-        vo.setExpireTime(file.getExpireTime().toString());
+        vo.setExpireTime(file.getExpireTime() != null ? file.getExpireTime().toString() : "");
         vo.setDownloadCount(file.getDownloadCount());
         vo.setStatus(file.getStatus());
         vo.setStatusText(file.getStatus() == 1 ? "正常" : "已删除");
         vo.setUploadToken(file.getUploadToken());
+        vo.setDownloadToken(file.getDownloadToken());
+
+        // 直接根据 fileId 去查询关联的下载限制表
+        DownloadLimit downloadLimit = downloadLimitService.getOne(
+                new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, file.getId())
+        );
+
+        if (downloadLimit != null) {
+            // 将数据库中的最大下载次数设置到 VO 中，供前端显示
+            vo.setMaxDownloads(downloadLimit.getMaxDownloads());
+            // 如果需要显示剩余时间，也可以在这里计算并设置有效时长
+        } else {
+            vo.setMaxDownloads(0); // 明确表示不限制
+        }
+
         return vo;
     }
 

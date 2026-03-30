@@ -31,6 +31,8 @@ export interface NearbyFile {
   distance?: number // 距离(米)
   uploadToken?: string // 上传令牌
   downloadToken?: string // 下载令牌
+  downloadCount?: number // 下载次数
+  maxDownloads?: number // 下载次数上限（0表示不限制）
 }
 
 export interface LocationResponse {

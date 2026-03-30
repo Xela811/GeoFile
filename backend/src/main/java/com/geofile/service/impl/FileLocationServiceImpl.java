@@ -1,9 +1,11 @@
 package com.geofile.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.geofile.entity.DownloadLimit;
 import com.geofile.entity.File;
 import com.geofile.entity.FileVO;
 import com.geofile.mapper.FileMapper;
+import com.geofile.service.DownloadLimitService;
 import com.geofile.service.FileLocationService;
 import com.geofile.service.FileService;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +32,9 @@ public class FileLocationServiceImpl extends ServiceImpl<FileMapper,File> implem
 
     @Autowired
     private FileService fileService;
+
+    @Autowired
+    private DownloadLimitService downloadLimitService;
 
     /**
      * 根据地理位置搜索附近文件
@@ -154,6 +159,14 @@ public class FileLocationServiceImpl extends ServiceImpl<FileMapper,File> implem
         // 计算距离（如果提供了用户位置）
         // 这个方法在调用时会被覆盖，所以这里返回null
         vo.setDistance(null);
+
+        // 设置下载次数上限
+        if (file.getDownloadLimitId() != null) {
+            DownloadLimit downloadLimit = downloadLimitService.getById(file.getDownloadLimitId());
+            if (downloadLimit != null) {
+                vo.setMaxDownloads(downloadLimit.getMaxDownloads());
+            }
+        }
 
         return vo;
     }
