@@ -16,7 +16,7 @@ public class RedisConfig {
         // Key 使用 String 序列化
         template.setKeySerializer(new StringRedisSerializer());
         // Value 使用 JSON 序列化
-        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
+        template.setValueSerializer(new StringRedisSerializer());
         return template;
     }
 }

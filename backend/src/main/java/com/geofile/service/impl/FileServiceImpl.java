@@ -34,6 +34,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
     @Autowired
     private DownloadLimitService downloadLimitService;
 
+
     @Override
     public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
                                          Integer pageNum, Integer pageSize,
@@ -69,7 +70,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
                 .between(File::getLocationLat, minLat, maxLat)
                 .between(File::getLocationLng, minLng, maxLng)
-                .eq(File::getStatus, 1)  // 只查询有效文件
+                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
                 .isNotNull(File::getLocationLat)
                 .isNotNull(File::getLocationLng);
 
@@ -84,13 +85,28 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             }
 
             // 按文件类型过滤（支持类型分类映射）
+//            if (fileType != null && !fileType.isEmpty()) {
+//                List<String> extensions = getFileExtensionsByType(fileType);
+//                if (!extensions.isEmpty()) {
+//                    queryWrapper.in(File::getFileType, extensions);
+//                } else {
+//                    // 如果不是预定义类型，直接匹配
+//                    queryWrapper.eq(File::getFileType, fileType);
+//                }
+//            }
             if (fileType != null && !fileType.isEmpty()) {
-                List<String> extensions = getFileExtensionsByType(fileType);
-                if (!extensions.isEmpty()) {
-                    queryWrapper.in(File::getFileType, extensions);
+                if ("other".equalsIgnoreCase(fileType)) {
+                    // 如果是“其他”，查询后缀不在已知汇总列表里的所有文件
+                    // 这样 .exe, .psd, .mat 等都会被包含进来
+                    queryWrapper.notIn(File::getFileType, KNOWN_EXTENSIONS);
                 } else {
-                    // 如果不是预定义类型，直接匹配
-                    queryWrapper.eq(File::getFileType, fileType);
+                    List<String> extensions = getFileExtensionsByType(fileType);
+                    if (!extensions.isEmpty()) {
+                        queryWrapper.in(File::getFileType, extensions);
+                    } else {
+                        // 如果不是预定义类型（比如前端直接传了 "exe"），直接匹配
+                        queryWrapper.eq(File::getFileType, fileType);
+                    }
                 }
             }
 
@@ -134,7 +150,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
                 .between(File::getLocationLat, minLat, maxLat)
                 .between(File::getLocationLng, minLng, maxLng)
-                .eq(File::getStatus, 1)
+                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
                 .isNotNull(File::getLocationLat)
                 .isNotNull(File::getLocationLng);
 
@@ -244,6 +260,15 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
         return vo;
     }
 
+    private static final List<String> KNOWN_EXTENSIONS = Arrays.asList(
+            "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif",
+            "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp", "mpeg", "mpg",
+            "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "ape", "amr",
+            "pdf",
+            "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp", "md",
+            "zip", "rar", "7z", "tar", "gz", "bz2", "xz"
+    );
+
     /**
      * 根据文件类型分类获取对应的文件扩展名列表
      * @param fileType 文件类型分类（image, video, audio, pdf, document, zip, other）
@@ -268,9 +293,51 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             case "zip":
                 return Arrays.asList("zip", "rar", "7z", "tar", "gz", "bz2", "xz");
             case "other":
+                return KNOWN_EXTENSIONS;
             default:
                 return new ArrayList<>();
         }
+    }
+
+
+    // 在 FileServiceImpl 中抽取出的公共逻辑
+    @Override
+    public File processAccess(Long fileId, String downloadToken) {
+        // 1. 查询并校验 (直接复用你提供的逻辑)
+        File file = this.getById(fileId);
+        if (file == null) throw new IllegalArgumentException("文件不存在");
+
+        // 2. 验证下载令牌
+        if (file.getDownloadToken() == null || !file.getDownloadToken().equals(downloadToken)) {
+            throw new IllegalArgumentException("无效的下载令牌");
+        }
+
+        // 3. 检查文件状态 (status=2过期, status=3耗尽)
+        if (file.getDeleted() == 1) throw new IllegalArgumentException("文件已被删除");
+        if (file.getStatus() != null) {
+            if (file.getStatus() == 2 || (file.getExpireTime() != null && file.getExpireTime().before(new Date()))) {
+                throw new IllegalArgumentException("文件已过期");
+            }
+            if (file.getStatus() == 3) throw new IllegalArgumentException("文件下载次数已达上限");
+        }
+
+        // 4. 执行计数逻辑
+        DownloadLimit downloadLimit = downloadLimitService.getOne(
+                new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
+        );
+        int currentCount = (file.getDownloadCount() == null) ? 0 : file.getDownloadCount();
+        int maxDownloads = (downloadLimit != null) ? downloadLimit.getMaxDownloads() : 0;
+
+        int nextCount = currentCount + 1;
+        file.setDownloadCount(nextCount);
+
+        if (maxDownloads > 0 && nextCount >= maxDownloads) {
+            file.setStatus(3); // 满额转残影状态
+        }
+
+        // 5. 保存并返回
+        this.updateById(file);
+        return file;
     }
 }
 

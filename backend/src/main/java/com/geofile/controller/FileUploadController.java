@@ -1,14 +1,19 @@
 package com.geofile.controller;
 
+import com.geofile.entity.*;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpStatus;
+import org.springframework.util.CollectionUtils;
 import com.geofile.common.Result;
-import com.geofile.entity.FileVO;
-import com.geofile.entity.UploadInfo;
-import com.geofile.entity.UploadProgress;
 import com.geofile.service.FileUploadService;
+import com.geofile.service.DownloadLimitService;
+import com.geofile.service.FileService;
+import com.geofile.util.RedisUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.cache.CacheProperties;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -21,9 +26,14 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.nio.file.Files;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import org.springframework.core.io.ByteArrayResource;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 /**
  * 文件上传Controller
@@ -38,6 +48,9 @@ public class FileUploadController {
     @Autowired
     private FileUploadService fileUploadService;
 
+    @Autowired
+    private FileService fileService;
+
     /**
      * 上传单个文件
      */
@@ -46,12 +59,13 @@ public class FileUploadController {
     public Result<FileVO> uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false, defaultValue = "0") Integer maxDownloads,
-            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes,
+            @RequestParam(required = false, defaultValue = "true") Boolean needCode) {
         try {
             log.info("文件上传开始: {}, 下载限制: {}次, 有效时长: {}分钟",
                     file.getOriginalFilename(), maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file, maxDownloads, validMinutes);
+            FileVO result = fileUploadService.uploadFile(file, maxDownloads, validMinutes, needCode);
 
             return Result.success(result);
 
@@ -80,12 +94,14 @@ public class FileUploadController {
             @RequestParam(required = false) Double lng,
             @RequestParam(required = false) Integer radius,
             @RequestParam(required = false, defaultValue = "0") Integer maxDownloads,
-            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes,
+            @RequestParam(required = false, defaultValue = "true") Boolean needCode
+    ) {
         try {
             log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     file.getOriginalFilename(), lat, lng, radius, maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes);
+            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes, needCode, null);
 
             return Result.success(result);
 
@@ -131,12 +147,13 @@ public class FileUploadController {
             @RequestParam(required = false) Double lng,
             @RequestParam(required = false) Integer radius,
             @RequestParam(required = false, defaultValue = "1") Integer maxDownloads,
-            @RequestParam(required = false, defaultValue = "0") Integer validMinutes) {
+            @RequestParam(required = false, defaultValue = "0") Integer validMinutes,
+            @RequestParam(required = false, defaultValue = "true") Boolean needCode) {
         try {
             log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     files.length, lat, lng, radius, maxDownloads, validMinutes);
 
-            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes);
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode);
 
             return Result.success(results);
 
@@ -284,6 +301,166 @@ public class FileUploadController {
         } catch (Exception e) {
             log.error("生成下载令牌失败: fileId={}", fileId, e);
             return Result.error("生成下载令牌失败: " + e.getMessage());
+        }
+    }
+    /**
+     * 通过取件码提取文件列表（支持批量）
+     */
+    @GetMapping("/extract/{code}")
+    public Result<List<FileVO>> extractFilesByCode(@PathVariable String code) {
+        if (code == null || code.trim().isEmpty()) {
+            return Result.error("请输入取件码");
+        }
+
+        try {
+            // 修改为返回 List
+            List<FileVO> fileVOs = fileUploadService.verifyAndGetFiles(code);
+            return Result.success(fileVOs);
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @PostMapping("/reconcile")
+    public Result<List<Long>> reconcileFiles(@RequestBody List<Long> fileIds) {
+        if (CollectionUtils.isEmpty(fileIds)) {
+            return Result.success(new ArrayList<>());
+        }
+
+        // 只查询数据库中 status 为 1 (正常) 或 3 (满额残影)
+        // 且未被逻辑删除的文件 ID
+        List<com.geofile.entity.File> validFiles = fileService.list(new LambdaQueryWrapper<com.geofile.entity.File>()
+                .select(com.geofile.entity.File::getId)
+                .in(com.geofile.entity.File::getId, fileIds)
+                .in(com.geofile.entity.File::getStatus, 1, 3)
+                .eq(com.geofile.entity.File::getDeleted, 0));
+
+        List<Long> validIds = validFiles.stream()
+                .map(com.geofile.entity.File::getId)
+                .collect(Collectors.toList());
+
+        return Result.success(validIds);
+    }
+
+    @GetMapping("/preview/{fileId}")
+    public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token) {
+        try {
+            // 1. 业务逻辑校验（包含计数+1）
+            com.geofile.entity.File fileEntity = fileService.processAccess(fileId, token);
+
+            java.io.File diskFile = new java.io.File(fileEntity.getFilePath());
+            if (!diskFile.exists()) {
+                return ResponseEntity.notFound().build();
+            }
+            Resource resource = new UrlResource(diskFile.toURI());
+
+            // 2. 增强型 Content-Type 识别
+            String contentType = Files.probeContentType(diskFile.toPath());
+            String fileName = fileEntity.getFileName().toLowerCase();
+
+            // 兜底逻辑：如果是代码或文本，强制设为 text/plain 以便 iframe 渲染
+            if (contentType == null || contentType.equals("application/octet-stream")) {
+                if (fileName.endsWith(".txt") || fileName.endsWith(".java") ||
+                        fileName.endsWith(".vue") || fileName.endsWith(".py") ||
+                        fileName.endsWith(".md") || fileName.endsWith(".sql")) {
+                    contentType = "text/plain; charset=utf-8"; // 指定 utf-8 防止中文乱码
+                } else if (fileName.endsWith(".pdf")) {
+                    contentType = "application/pdf";
+                } else {
+                    contentType = "application/octet-stream";
+                }
+            }
+
+            // 3. 构建响应头
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    // 关键优化：inline 模式
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" +
+                            URLEncoder.encode(fileEntity.getFileName(), "UTF-8") + "\"")
+                    // 关键修复：移除或配置 X-Frame-Options，允许 iframe 嵌入
+                    // 注意：如果项目中开启了 Spring Security，还需要在配置类中设置 .frameOptions().disable()
+                    .header("X-Frame-Options", "ALLOWALL")
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .body(resource);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        } catch (Exception e) {
+            log.error("预览失败", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @GetMapping("/archive/list/{fileId}")
+    public ResponseEntity<List<ArchiveNode>> listArchiveContent(@PathVariable Long fileId, @RequestParam String token) {
+        try {
+            // 1. 查询并校验
+            com.geofile.entity.File file = fileService.getById(fileId);
+            if (file == null) throw new IllegalArgumentException("文件不存在");
+
+            // 2. 验证下载令牌
+            if (file.getDownloadToken() == null || !file.getDownloadToken().equals(token)) {
+                throw new IllegalArgumentException("无效的下载令牌");
+            }
+
+            // 3. 检查文件状态 (status=2过期, status=3耗尽)
+            if (file.getDeleted() == 1) throw new IllegalArgumentException("文件已被删除");
+            if (file.getStatus() != null) {
+                if (file.getStatus() == 2 || (file.getExpireTime() != null && file.getExpireTime().before(new Date()))) {
+                    throw new IllegalArgumentException("文件已过期");
+                }
+                if (file.getStatus() == 3) throw new IllegalArgumentException("文件下载次数已达上限");
+            }
+
+            java.io.File diskFile = new java.io.File(file.getFilePath());
+
+            // 4. 初始化虚拟根节点
+            ArchiveNode root = new ArchiveNode("root", true, 0);
+
+            try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(diskFile)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zipFile.entries();
+                while (entries.hasMoreElements()) {
+                    java.util.zip.ZipEntry entry = entries.nextElement();
+                    // 5. 将扁平路径插入树中
+                    insertToTree(root, entry);
+                }
+            }
+            // 返回根节点的子集（即压缩包第一层）
+            return ResponseEntity.ok(root.getChildren());
+        } catch (Exception e) {
+            log.error("解析压缩包失败", e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    private void insertToTree(ArchiveNode root, java.util.zip.ZipEntry entry) {
+        String[] parts = entry.getName().split("/");
+        ArchiveNode current = root;
+
+        for (int i = 0; i < parts.length; i++) {
+            String partName = parts[i];
+            if (partName.isEmpty()) continue;
+
+            boolean isLastPart = (i == parts.length - 1);
+            // 判断当前 part 是不是目录：
+            // 如果不是最后一个 part，那它一定是目录；如果是最后一个 part，看 ZipEntry 标记
+            boolean isDir = !isLastPart || entry.isDirectory();
+
+            // 在当前节点的子节点中查找
+            ArchiveNode next = null;
+            for (ArchiveNode child : current.getChildren()) {
+                if (child.getName().equals(partName)) {
+                    next = child;
+                    break;
+                }
+            }
+
+            // 如果不存在则创建
+            if (next == null) {
+                next = new ArchiveNode(partName, isDir, isLastPart ? entry.getSize() : 0);
+                current.getChildren().add(next);
+            }
+            current = next;
         }
     }
 }

@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.util.Date;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 /**
@@ -151,4 +153,10 @@ public class File {
      */
     @TableField(exist = false)
     private Long downloadLimitId;
+
+    /**
+     * 是否私有（用于限制文件可见范围）
+     */
+    @TableField(value = "is_private")
+    private Integer isPrivate;
 }

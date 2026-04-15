@@ -55,7 +55,7 @@ public class VerificationCodeController {
     @Operation(summary = "获取下载Token", description = "生成用于文件下载的JWT Token")
     @GetMapping("/token/download")
     public Result<String> getDownloadToken() {
-        String token = verificationCodeService.generateDownloadToken();
+        String token = verificationCodeService.generateDownloadCode();
         return Result.success(token);
     }
 
@@ -67,7 +67,7 @@ public class VerificationCodeController {
     @Operation(summary = "验证下载Token", description = "验证JWT Token是否有效")
     @PostMapping("/token/verify")
     public Result<Boolean> verifyDownloadToken(@RequestHeader("Authorization") String token) {
-        boolean isValid = verificationCodeService.verifyDownloadToken(token);
+        boolean isValid = verificationCodeService.verifyDownloadCode(token);
         return Result.success(isValid);
     }
 }

@@ -1,5 +1,7 @@
 package com.geofile.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 /**
@@ -101,4 +103,15 @@ public class FileVO {
      * 下载次数上限（0表示不限制）
      */
     private Integer maxDownloads;
+
+    /**
+     * 下载验证码（5位字母数字，用于通过验证码下载）
+     */
+    private String downloadCode;
+
+    /**
+     * 是否私有（用于限制文件可见范围）
+     */
+    @TableField(value = "is_private")
+    private Integer isPrivate;
 }

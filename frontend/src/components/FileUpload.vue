@@ -169,6 +169,7 @@ interface Props {
   tip?: string
   maxDownloads?: number // 最大下载次数
   validMinutes?: number // 有效时长（分钟）
+  needCode?: boolean // 新增：是否需要验证码（私有/公开开关）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -182,6 +183,7 @@ const props = withDefaults(defineProps<Props>(), {
   tip: '支持 JPG、PNG、PDF、DOC、TXT 等格式，单个文件不超过 100MB',
   maxDownloads: 1,
   validMinutes: 30,
+  needCode: true, // 默认开启验证码，即私有模式
 })
 
 const emit = defineEmits<{
@@ -252,11 +254,12 @@ const allowedTypes = [
   'xml',
   'csv',
 ]
-const maxSize = 100 * 1024 * 1024 // 100MB
+const FORBIDDEN_EXTS = ['jsp', 'php', 'asp', 'aspx', 'sh', 'py', 'bat']
+const maxSize = 1024 * 1024 * 1024 // 1GB
 
 // 处理文件选择
 const handleFileChange = (file: UploadUserFile) => {
-  // 验证文件类型
+  /*// 验证文件类型
   const extension = getExtension(file.name)
   if (!allowedTypes.includes(extension)) {
     ElMessage.error(`不支持的文件类型: ${extension}`)
@@ -268,11 +271,45 @@ const handleFileChange = (file: UploadUserFile) => {
     return false
   }
 
+  return true*/
+  const fileName = file.name
+  const extension = getExtension(fileName)
+
+  // --- 逻辑 A: 黑名单硬性拦截 (脚本文件) ---
+  if (FORBIDDEN_EXTS.includes(extension)) {
+    ElMessage.error(`出于安全考虑，禁止上传脚本文件: .${extension}`)
+
+    // 手动从文件列表中移除，防止 UI 显示残留
+    const index = fileList.value.findIndex((f) => f.uid === file.uid)
+    if (index !== -1) {
+      fileList.value.splice(index, 1)
+    }
+    return false
+  }
+
+  // --- 逻辑 B: 大小硬性拦截 ---
+  if (file.size && file.size > maxSize) {
+    ElMessage.error('文件大小超过限制（1GB）')
+
+    const index = fileList.value.findIndex((f) => f.uid === file.uid)
+    if (index !== -1) {
+      fileList.value.splice(index, 1)
+    }
+    return false
+  }
+
+  // --- 逻辑 C: 白名单软提醒 (不拦截上传) ---
+  // 如果不在预览白名单内（如 exe, mat, psd），只做提醒，允许其上传
+  if (!allowedTypes.includes(extension)) {
+    console.info(`[GeoFile] 提示：文件格式 .${extension} 暂不支持在线预览，但可以正常传输和取件。`)
+    // 这里不需要 return false，因为它不是致命错误
+  }
+
   return true
 }
 
 // 开始上传
-const startUpload = async () => {
+/*const startUpload = async () => {
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择要上传的文件')
     return
@@ -374,6 +411,14 @@ const startUpload = async () => {
           console.log('添加有效时长到表单:', { validMinutes: props.validMinutes })
         }
 
+        // --- 4. 核心修改：添加“是否需要验证码”参数 ---
+        // 即使 needCode 是布尔值，formData 也会将其转为字符串 "true" 或 "false"
+        // 后端 Spring Boot 的 Boolean 类型会自动识别这两个字符串
+        if (props.needCode !== undefined) {
+          formData.append('needCode', props.needCode.toString())
+          console.log('添加验证码开关到表单:', { needCode: props.needCode })
+        }
+
         // 上传文件
         const response = await fetch(uploadUrl, {
           method: 'POST',
@@ -423,6 +468,126 @@ const startUpload = async () => {
     const err = e as Error
     uploadError.value = err
     ElMessage.error('上传失败: ' + err.message)
+    emit('error', err)
+  } finally {
+    isUploading.value = false
+  }
+}*/
+
+// 开始上传 (批量改写版)
+const startUpload = async () => {
+  if (fileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的文件')
+    return
+  }
+
+  // 检查是否需要配置下载限制
+  if (props.maxDownloads === 0 || props.validMinutes === 0) {
+    emit('require-limit-config')
+    return
+  }
+
+  isUploading.value = true
+
+  try {
+    // 1. 获取位置信息逻辑 (保持原样)
+    const savedLocationStr = localStorage.getItem('userLocation')
+    let locationData = null
+    if (savedLocationStr) {
+      try {
+        locationData = JSON.parse(savedLocationStr)
+        if (locationData.useFixedCoords) {
+          ElMessage.warning('开发测试模式：使用固定坐标上传文件')
+        }
+      } catch (error) {
+        console.error('解析位置信息失败:', error)
+      }
+    }
+
+    if (!locationData || !locationData.lat || !locationData.lng) {
+      ElMessage.info('未检测到位置信息，文件上传成功但不记录位置')
+    }
+
+    // 2. 获取Token (保持原样)
+    const tokenRes = await fetch('/api/file/generate-download-token/{fileId}')
+    const { data: token } = await tokenRes.json()
+
+    // 3. 统一使用批量上传接口
+    const uploadUrl = '/api/file/upload/batch-with-location'
+
+    // 4. 创建 FormData 并封装所有数据
+    const formData = new FormData()
+
+    // --- 核心修改：将所有文件添加到同一个 Key (files) 中 ---
+    fileList.value.forEach((file) => {
+      if (file.raw) {
+        formData.append('files', file.raw) // 对应后端 @RequestParam("files")
+      }
+    })
+
+    // --- 位置参数处理 (保持原逻辑) ---
+    let uploadLat = locationData?.lat
+    let uploadLng = locationData?.lng
+    let uploadRadius = locationData?.radius || 1000
+
+    if (locationData?.useFixedCoords) {
+      uploadLat = FIXED_LAT
+      uploadLng = FIXED_LNG
+      uploadRadius = 1000
+    }
+
+    if (uploadLat && uploadLng) {
+      formData.append('lat', uploadLat.toString())
+      formData.append('lng', uploadLng.toString())
+      formData.append('radius', uploadRadius.toString())
+    }
+
+    // --- 业务参数处理 (保持原逻辑) ---
+    if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
+      formData.append('maxDownloads', props.maxDownloads.toString())
+    }
+    if (props.validMinutes !== undefined && props.validMinutes > 0) {
+      formData.append('validMinutes', props.validMinutes.toString())
+    }
+    if (props.needCode !== undefined) {
+      formData.append('needCode', props.needCode.toString())
+    }
+    if (props.needCode !== undefined) {
+      formData.append('needCode', props.needCode.toString())
+      console.log('添加验证码开关到表单:', { needCode: props.needCode })
+    }
+    console.log('发起批量上传，文件数量:', fileList.value.length)
+
+    // 5. 执行单次批量上传请求
+    const response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    })
+
+    const result: { code: number; data?: any[]; message?: string } = await response.json()
+
+    if (result.code === 200) {
+      // 批量上传成功
+      ElMessage.success(`成功上传 ${fileList.value.length} 个文件`)
+
+      // 传递完整 Result，便于父组件从 data 中遍历全部 FileVO 并保存每个 uploadToken
+      if (result.data && result.data.length > 0) {
+        emit('upload-success', result)
+      }
+
+      emit('success', fileList.value)
+    } else {
+      ElMessage.error(`上传失败: ${result.message || '未知错误'}`)
+      // 将所有文件标记为失败
+      fileList.value.forEach((f) => (f.status = 'fail'))
+    }
+  } catch (e) {
+    const err = e as Error
+    uploadError.value = err
+    ElMessage.error('上传过程中发生错误: ' + err.message)
     emit('error', err)
   } finally {
     isUploading.value = false
@@ -492,10 +657,23 @@ const formatFileSize = (bytes: number) => {
 // 获取文件扩展名
 const getExtension = (filename: string) => {
   if (!filename) return ''
-  const parts = filename.split('.')
+  /*const parts = filename.split('.')
   if (parts.length === 0) return ''
   const ext = parts.length > 1 ? (parts[parts.length - 1] ?? '') : ''
-  return ext.toLowerCase()
+  return ext.toLowerCase()*/
+  // 1. 去除文件名首尾空格和末尾的点（防御 Windows 系统下的绕过漏洞）
+  const trimmedName = filename.trim().replace(/\.+$/, '')
+
+  // 2. 查找最后一个点的位置
+  const lastDotIndex = trimmedName.lastIndexOf('.')
+
+  // 3. 确保点不是文件名的第一个字符（隐藏文件），且点后面有内容
+  if (lastDotIndex <= 0 || lastDotIndex === trimmedName.length - 1) {
+    return ''
+  }
+
+  // 4. 截取并转为小写
+  return trimmedName.substring(lastDotIndex + 1).toLowerCase()
 }
 
 // 开始分片上传

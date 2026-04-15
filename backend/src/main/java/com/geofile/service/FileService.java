@@ -50,4 +50,7 @@ public interface FileService extends IService<File> {
      * @param radius 半径
      */
     void updateFileLocation(Long fileId, Double lat, Double lng, Integer radius);
+
+
+    File processAccess(Long fileId, String token);
 }

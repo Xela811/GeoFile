@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @Slf4j
 @RestControllerAdvice
@@ -38,5 +39,10 @@ public class GlobalExceptionHandler {
         // 这里的 log 非常重要，否则你不知道后台出了什么错
         log.error("【系统未知错误】: ", e);
         return Result.error(500, "服务器繁忙，请稍后再试");
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<String> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
+        return Result.error("文件太大了！单文件不能超过限制大小。");
     }
 }

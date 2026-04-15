@@ -100,7 +100,20 @@
       <el-card class="search-card" v-loading="filesLoading">
         <template #header>
           <div class="card-header">
-            <span>附近文件 ({{ nearbyFiles.length }} / {{ paginationInfo.total || 0 }})</span>
+            <span>🔍 发现文件 ({{ nearbyFiles.length }} / {{ paginationInfo.total || 0 }})</span>
+            <div class="code-extract-area" style="width: 250px">
+              <el-input
+                v-model="extractCode"
+                placeholder="输入取件码提取文件"
+                :prefix-icon="Key"
+                clearable
+                @keyup.enter="handleExtractByCode"
+              >
+                <template #append>
+                  <el-button @click="handleExtractByCode" :loading="extractLoading">提取</el-button>
+                </template>
+              </el-input>
+            </div>
             <el-button
               type="primary"
               :icon="Search"
@@ -178,6 +191,13 @@
               <el-icon :size="40">
                 <component :is="getFileIcon(file.fileType)" />
               </el-icon>
+              <div
+                v-if="file.isPrivate === 1"
+                class="preview-mask"
+                @click.stop="handlePreview(file)"
+              >
+                🔎预览
+              </div>
             </div>
             <div class="file-info">
               <div class="file-name">{{ file.fileName }}</div>
@@ -196,6 +216,116 @@
             </div>
           </div>
         </div>
+
+        <el-dialog
+          v-model="previewVisible"
+          :title="'正在预览: ' + activeFile?.fileName"
+          width="70%"
+          top="5vh"
+          destroy-on-close
+          class="preview-dialog"
+        >
+          <div v-loading="previewLoading" class="preview-body">
+            <template v-if="isImage(activeFile?.fileType)">
+              <div class="img-wrapper">
+                <img :src="previewUrl" @load="previewLoading = false" class="preview-content-img" />
+              </div>
+            </template>
+
+            <template v-else-if="isDocOrText(activeFile?.fileType)">
+              <iframe
+                :src="previewUrl"
+                class="preview-iframe"
+                @load="previewLoading = false"
+              ></iframe>
+            </template>
+
+            <template v-else-if="isVideo(activeFile?.fileType)">
+              <div class="video-wrapper">
+                <video
+                  :src="previewUrl"
+                  controls
+                  playsinline
+                  class="preview-video"
+                  @canplay="previewLoading = false"
+                >
+                  您的浏览器不支持视频播放
+                </video>
+              </div>
+            </template>
+
+            <template v-else-if="isAudio(activeFile?.fileType)">
+              <div class="audio-wrapper">
+                <audio :src="previewUrl" controls autoplay @canplay="previewLoading = false">
+                  您的浏览器不支持音频播放
+                </audio>
+              </div>
+            </template>
+
+            <template v-else-if="isArchive(activeFile?.fileType)">
+              <div class="archive-preview">
+                <div class="archive-header">
+                  <el-icon><FolderOpened /></el-icon>
+                  <span>压缩包文件结构</span>
+                </div>
+                <el-scrollbar height="500px">
+                  <el-tree
+                    :data="archiveTree"
+                    :props="{ label: 'name', children: 'children' }"
+                    indent="20"
+                  >
+                    <template #default="{ node, data }">
+                      <div class="custom-tree-node">
+                        <el-icon v-if="data.directory" color="#e6a23c"><Folder /></el-icon>
+                        <el-icon v-else color="#409eff"><Document /></el-icon>
+                        <span class="node-label">{{ node.label }}</span>
+                        <span v-if="!data.directory" class="node-size">
+                          {{ formatFileSize(data.size) }}
+                        </span>
+                      </div>
+                    </template>
+                  </el-tree>
+                </el-scrollbar>
+              </div>
+            </template>
+
+            <template v-else-if="isInstaller(activeFile?.fileType)">
+              <div class="installer-info-box" style="text-align: center; padding: 40px 0">
+                <el-icon size="80" color="#409eff"><Platform /></el-icon>
+                <h3 style="margin-top: 20px">
+                  程序安装包 ({{ activeFile?.fileType?.toUpperCase() }})
+                </h3>
+                <p style="color: #909399; margin-bottom: 24px">
+                  该文件为可执行程序，为了您的系统安全，请下载到本地后运行。
+                </p>
+                <el-descriptions :column="1" border style="max-width: 400px; margin: 0 auto 20px">
+                  <el-descriptions-item label="文件名">{{
+                    activeFile?.fileName
+                  }}</el-descriptions-item>
+                  <el-descriptions-item label="大小">{{
+                    formatFileSize(activeFile?.fileSize)
+                  }}</el-descriptions-item>
+                </el-descriptions>
+                <el-button type="primary" size="large" @click="downloadFileFromPreview">
+                  立即下载
+                </el-button>
+              </div>
+            </template>
+
+            <el-result v-else icon="warning" title="当前格式不支持在线预览">
+              <template #extra>
+                <el-button type="primary" @click="downloadFileFromPreview">下载原文件</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <template #footer>
+            <div class="preview-footer-info">
+              <el-tag size="small" type="info">格式: {{ activeFile?.fileType }}</el-tag>
+              <span class="warning-text">提示：预览操作将消耗一次下载额度</span>
+            </div>
+          </template>
+        </el-dialog>
 
         <!-- 空状态 -->
         <el-empty
@@ -382,11 +512,16 @@ import {
   Picture,
   VideoCamera,
   Headset,
+  Memo,
+  TakeawayBox,
   Delete,
   Timer,
+  Key,
 } from '@element-plus/icons-vue'
 import FileUpload from '@/components/FileUpload.vue'
-import locationService, { LocationInfo, NearbyFile } from '@/services/locationService'
+import locationService from '@/services/locationService'
+import type { LocationInfo, NearbyFile } from '@/services/locationService'
+import { reconcileMyUploadedFiles } from '@/services/reconcileService'
 
 const router = useRouter()
 
@@ -412,6 +547,11 @@ const paginationInfo = ref({
   hasPrevious: false,
   hasNext: false,
 })
+
+/** 取件码私有列表视图：为 true 时翻页/删项不调用附近公开搜索 */
+const isExtractListView = ref(false)
+const activeExtractCode = ref('')
+const extractedFilesFull = ref<NearbyFile[]>([])
 
 // 开发测试配置
 const useFixedCoordinates = ref(false)
@@ -481,12 +621,16 @@ const handleGetCurrentLocation = async () => {
   }
 }
 
-// 搜索附近文件
+// 搜索附近文件（会退出「取件码私有列表」视图）
 const handleSearch = async () => {
   if (!locationInfo.value?.lat || !locationInfo.value?.lng) {
     ElMessage.warning('请先获取位置信息')
     return
   }
+
+  isExtractListView.value = false
+  activeExtractCode.value = ''
+  extractedFilesFull.value = []
 
   console.log('开始搜索附近文件:', {
     lat: locationInfo.value.lat,
@@ -557,6 +701,24 @@ const handleSearch = async () => {
   }
 }
 
+/** 取件码模式：根据全量列表与当前页做前端分页，写入 nearbyFiles */
+const applyExtractPage = () => {
+  const total = extractedFilesFull.value.length
+  paginationInfo.value.total = total
+  const pageSize = paginationInfo.value.pageSize
+  let pageNum = paginationInfo.value.pageNum
+  const maxPage = Math.max(1, Math.ceil(total / pageSize) || 1)
+  if (pageNum > maxPage) {
+    pageNum = maxPage
+    paginationInfo.value.pageNum = pageNum
+  }
+  const start = (pageNum - 1) * pageSize
+  nearbyFiles.value = extractedFilesFull.value.slice(start, start + pageSize)
+  paginationInfo.value.totalPages = maxPage
+  paginationInfo.value.hasPrevious = pageNum > 1
+  paginationInfo.value.hasNext = pageNum < maxPage
+}
+
 // 文件上传成功
 const handleUploadSuccess = (uploadedFile: any) => {
   console.log('handleUploadSuccess 收到数据:', uploadedFile)
@@ -564,12 +726,29 @@ const handleUploadSuccess = (uploadedFile: any) => {
   ElMessage.success('文件上传成功！')
 
   // 存储上传令牌到localStorage（用于免登录删除）
-  if (uploadedFile && uploadedFile.id && uploadedFile.uploadToken) {
+  /*if (uploadedFile && uploadedFile.id && uploadedFile.uploadToken) {
     saveUploadToken(uploadedFile.id, uploadedFile.uploadToken)
   } else {
     console.warn('上传令牌数据不完整:', uploadedFile)
+  }*/
+  // 支持 Result{ data }、FileVO[]、单个 FileVO（与 FileUpload 各路径对齐）
+  const raw = uploadedFile && uploadedFile.data !== undefined ? uploadedFile.data : uploadedFile
+  let items: { id?: number; uploadToken?: string }[] = []
+  if (Array.isArray(raw)) {
+    items = raw
+  } else if (raw && raw.id != null && raw.uploadToken) {
+    items = [raw]
   }
-
+  if (items.length > 0) {
+    console.log(`保存 ${items.length} 个文件的上传令牌`)
+    items.forEach((file) => {
+      if (file.id != null && file.uploadToken) {
+        saveUploadToken(Number(file.id), file.uploadToken)
+      }
+    })
+  } else {
+    console.warn('上传成功但未提取到有效的 ID 或 Token:', uploadedFile)
+  }
   // 如果位置信息已获取，则重新搜索附近文件
   if (locationInfo.value?.lat && locationInfo.value?.lng) {
     handleSearch()
@@ -651,19 +830,34 @@ const handleDeleteFile = async (file: NearbyFile) => {
       delete myFiles[file.id]
       localStorage.setItem('myUploadedFiles', JSON.stringify(myFiles))
 
-      // 从文件列表中移除
-      nearbyFiles.value = nearbyFiles.value.filter((f) => f.id !== file.id)
+      // 从文件列表中移除（取件码视图：同步全量列表并仅刷新当前页，不触发附近公开搜索）
+      if (isExtractListView.value) {
+        extractedFilesFull.value = extractedFilesFull.value.filter((f) => f.id !== file.id)
+        if (extractedFilesFull.value.length === 0) {
+          isExtractListView.value = false
+          activeExtractCode.value = ''
+          nearbyFiles.value = []
+          paginationInfo.value.total = 0
+          paginationInfo.value.totalPages = 0
+          paginationInfo.value.hasPrevious = false
+          paginationInfo.value.hasNext = false
+        } else {
+          const pageSize = paginationInfo.value.pageSize
+          const maxPage = Math.max(1, Math.ceil(extractedFilesFull.value.length / pageSize) || 1)
+          if (paginationInfo.value.pageNum > maxPage) {
+            paginationInfo.value.pageNum = maxPage
+          }
+          applyExtractPage()
+        }
+      } else {
+        nearbyFiles.value = nearbyFiles.value.filter((f) => f.id !== file.id)
+      }
 
       // 关闭详情对话框（如果正在查看该文件）
       if (selectedFile.value && selectedFile.value.id === file.id) {
         showDetailDialog.value = false
         selectedFile.value = null
       }
-
-      // 显示成功消息后重新搜索（确保从数据库获取最新数据）
-      setTimeout(() => {
-        handleSearch()
-      }, 500)
     } else {
       ElMessage.error(result.message || '删除失败')
     }
@@ -749,9 +943,9 @@ const downloadFile = async () => {
 
     // 2. 延迟同步：给后端数据库写入留出 1 秒缓冲时间，再刷新列表
     // 这样可以避免 handleSearch 拿到还没更新完的旧数据（或 0）
-    setTimeout(() => {
+    /*setTimeout(() => {
       handleSearch()
-    }, 1000)
+    }, 1000)*/
   } catch (error: any) {
     console.error('下载文件失败:', error)
 
@@ -797,12 +991,68 @@ const formatFileSize = (bytes: number): string => {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
 }
 
-// 获取文件图标
+// 后端 fileType 为扩展名（如 jpg、zip），不是 MIME；按扩展名 + MIME 字符串兼容
+const IMAGE_EXTS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'bmp',
+  'svg',
+  'ico',
+  'avif',
+  'heic',
+])
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v', 'mpeg', 'mpg'])
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma', 'opus'])
+const ARCHIVE_EXTS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'lzma', 'zst'])
+const TEXT_CODE_EXTS = new Set([
+  'txt',
+  'md',
+  'log',
+  'csv',
+  'json',
+  'xml',
+  'yaml',
+  'yml',
+  'ini',
+  'env',
+  'ts',
+  'js',
+  'vue',
+  'html',
+  'htm',
+  'css',
+  'scss',
+  'less',
+  'java',
+  'py',
+  'go',
+  'rs',
+  'c',
+  'cpp',
+  'h',
+  'sql',
+])
+const INSTALLER_EXTS = new Set(['exe', 'msi', 'apk', 'dmg', 'pkg'])
+
 const getFileIcon = (fileType: string) => {
-  if (fileType.includes('pdf')) return Document
-  if (fileType.includes('image')) return Picture
-  if (fileType.includes('video')) return VideoCamera
-  if (fileType.includes('audio')) return Headset
+  const raw = (fileType || '').toLowerCase().trim()
+  if (!raw) return Document
+  if (raw.includes('/')) {
+    if (raw.startsWith('image/')) return Picture
+    if (raw.startsWith('video/')) return VideoCamera
+    if (raw.startsWith('audio/')) return Headset
+    if (raw === 'application/pdf' || raw.includes('pdf')) return Document
+  }
+  const ext = raw.replace(/^\./, '')
+  if (ext === 'pdf') return Document
+  if (IMAGE_EXTS.has(ext)) return Picture
+  if (VIDEO_EXTS.has(ext)) return VideoCamera
+  if (AUDIO_EXTS.has(ext)) return Headset
+  if (ARCHIVE_EXTS.has(ext)) return TakeawayBox
+  if (TEXT_CODE_EXTS.has(ext)) return Memo
   return Document
 }
 
@@ -902,14 +1152,22 @@ watch(useFixedCoordinates, (newVal) => {
 // 处理页码变化
 const handleCurrentChange = (page: number) => {
   paginationInfo.value.pageNum = page
-  handleSearch()
+  if (isExtractListView.value) {
+    applyExtractPage()
+  } else {
+    handleSearch()
+  }
 }
 
 // 处理每页大小变化
 const handleSizeChange = (size: number) => {
   paginationInfo.value.pageSize = size
   paginationInfo.value.pageNum = 1 // 重置到第一页
-  handleSearch()
+  if (isExtractListView.value) {
+    applyExtractPage()
+  } else {
+    handleSearch()
+  }
 }
 
 // 重置搜索
@@ -982,6 +1240,9 @@ onUnmounted(() => {
 onMounted(() => {
   console.log('首页初始化...')
 
+  // 对账清理 myUploadedFiles，避免后端定时下架后本地仍残留上传令牌
+  void reconcileMyUploadedFiles()
+
   // 检查是否已经有位置信息（可以从localStorage读取）
   const savedLocation = localStorage.getItem('userLocation')
   if (savedLocation) {
@@ -1008,6 +1269,212 @@ onMounted(() => {
     ElMessage.info('请先获取当前位置')
   }
 })
+
+// 新增：提取码相关变量
+const extractCode = ref('')
+const extractLoading = ref(false)
+
+/**
+ * 通过取件码提取文件
+ * 逻辑：后端根据 code 在 Redis 找到 batchUploadToken，再返回对应的文件列表
+ */
+const handleExtractByCode = async () => {
+  if (!extractCode.value) {
+    ElMessage.warning('请输入取件码')
+    return
+  }
+
+  extractLoading.value = true
+  try {
+    // 假设你的后端接口路径为 /api/file/extract/{code}
+    const response = await fetch(`/api/file/extract/${extractCode.value}`, {
+      method: 'GET',
+    })
+
+    const result = await response.json()
+
+    if (result.code === 200) {
+      if (result.data && result.data.length > 0) {
+        isExtractListView.value = true
+        activeExtractCode.value = extractCode.value.trim()
+        extractedFilesFull.value = result.data
+        paginationInfo.value.pageNum = 1
+        applyExtractPage()
+
+        ElMessage.success(`成功提取 ${result.data.length} 个文件`)
+      } else {
+        isExtractListView.value = false
+        activeExtractCode.value = ''
+        extractedFilesFull.value = []
+        nearbyFiles.value = []
+        paginationInfo.value.total = 0
+        ElMessage.info('该取件码下没有有效文件')
+      }
+    } else {
+      ElMessage.error(result.message || '提取失败，请检查取件码是否正确')
+    }
+  } catch (error) {
+    console.error('提取文件出错:', error)
+    ElMessage.error('网络错误，请稍后再试')
+  } finally {
+    extractLoading.value = false
+  }
+}
+
+// 预览处理函数
+/*const handlePreview = (file) => {
+  // 1. 检查是否有权限（私有文件必须有获取成功的 token）
+  // 提示：如果你在列表能看到这个文件，说明你已经输过取件码了
+  if (!file.downloadToken) {
+    ElMessage.warning('该文件需要验证取件码后方可预览')
+    return
+  }
+
+  // 2. 构造后端预览地址
+  // 假设你的后端服务地址在 base_url，路径是你刚才设计的接口
+  const previewUrl = `/api/file/preview/${file.id}?token=${file.downloadToken}`
+
+  // 3. 在新标签页打开预览
+  // 浏览器会自动根据 MIME 类型决定是渲染图片、播放视频还是 PDF 预览
+  window.open(previewUrl, '_blank')
+
+  // 提示：因为预览也计入下载，如果你希望前端列表的数字实时更新，
+  // 可以在这里手动给 file.downloadCount++ 或者重新对账
+  file.downloadCount++
+}*/
+
+// --- 新增预览相关的响应式变量 ---
+const previewVisible = ref(false)
+const previewLoading = ref(false)
+const previewUrl = ref('')
+const activeFile = ref<NearbyFile | null>(null)
+const showInstallerInfo = ref(false)
+
+// --- 复用你已有的常量进行逻辑判断 ---
+const isImage = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '')
+  return IMAGE_EXTS.has(ext)
+}
+
+const isDocOrText = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '')
+  // 包含 PDF 以及你定义的全部文本/代码格式
+  return ext === 'pdf' || TEXT_CODE_EXTS.has(ext)
+}
+
+const isVideo = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '').trim()
+  return VIDEO_EXTS.has(ext)
+}
+
+const isAudio = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '').trim()
+  return AUDIO_EXTS.has(ext)
+}
+
+const isInstaller = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '').trim()
+  return INSTALLER_EXTS.has(ext)
+}
+
+// --- 重构后的预览入口函数 ---
+const handlePreview = async (file: NearbyFile) => {
+  showInstallerInfo.value = false // 重置安装包标志
+  previewUrl.value = '' // 清空预览链接
+  archiveTree.value = [] // 清空压缩包树
+  if (!file.downloadToken) {
+    ElMessage.warning('该文件需要验证取件码后方可预览')
+    return
+  }
+
+  activeFile.value = file
+  const fileType = (file.fileType || '').toLowerCase().replace(/^\./, '').trim()
+  if (isInstaller(file.fileType)) {
+    // 不去 fetch 后端，直接展示一个精美的安装包图标和下载按钮
+    showInstallerInfo.value = true
+    previewVisible.value = true
+    return
+  }
+  if (isArchive(file.fileType)) {
+    previewLoading.value = true
+    previewVisible.value = true // 先打开弹窗显示加载状态
+    try {
+      // 请求后端构建好的树形结构
+      const response = await fetch(`/api/file/archive/list/${file.id}?token=${file.downloadToken}`)
+      if (!response.ok) throw new Error('解析失败')
+      archiveTree.value = await response.json()
+    } catch (error) {
+      ElMessage.error('无法读取压缩包目录')
+      previewVisible.value = false
+    } finally {
+      previewLoading.value = false
+    }
+    return
+  }
+  /*else {
+    previewLoading.value = true
+
+    // 这里的 t=Date.now() 非常关键，它能强迫浏览器绕过本地磁盘缓存获取最新的后端流
+    previewUrl.value = `/api/file/preview/${file.id}?token=${file.downloadToken}&t=${Date.now()}`
+    previewVisible.value = true
+
+    // 乐观更新：预览即下载，立即反馈在 UI 上
+    if (typeof file.downloadCount === 'number') {
+      file.downloadCount++
+    }
+  }*/
+  // 只有 图片、视频、音频、PDF、代码文本 才允许发起预览请求
+  const canBrowserPreview =
+    isImage(fileType) || isVideo(fileType) || isAudio(fileType) || isDocOrText(fileType)
+
+  if (canBrowserPreview) {
+    // 执行正常的预览逻辑
+    previewLoading.value = true
+    previewUrl.value = `/api/file/preview/${file.id}?token=${file.downloadToken}&t=${Date.now()}`
+    previewVisible.value = true
+
+    if (typeof file.downloadCount === 'number') {
+      file.downloadCount++
+    }
+  } else {
+    // --- 拦截不支持的格式（如 .mat, .opju, .psd 等） ---
+    ElMessageBox.confirm(
+      `文件 ".${fileType}" 是专有格式，暂不支持在线预览。您可以直接下载后查看其内容。`,
+      '提示',
+      {
+        confirmButtonText: '立即下载',
+        cancelButtonText: '我知道了',
+        type: 'info',
+        distinguishCancelAndClose: true,
+      },
+    )
+      .then(() => {
+        // 如果用户点击“立即下载”，调用你已有的下载函数
+        handleDownload(file)
+      })
+      .catch(() => {
+        // 用户点击关闭或取消，不执行任何操作
+      })
+  }
+}
+
+// 预览窗口内的快捷下载
+const downloadFileFromPreview = () => {
+  if (activeFile.value) {
+    // 逻辑：关闭预览，开启详情弹窗来触发下载（或者直接调用你的 downloadFile）
+    previewVisible.value = false
+    selectedFile.value = activeFile.value
+    downloadFile()
+  }
+}
+
+const archiveTree = ref<any[]>([])
+
+// 增加压缩包判断
+const isArchive = (fileType: string) => {
+  const ext = (fileType || '').toLowerCase().replace(/^\./, '').trim()
+  return ARCHIVE_EXTS.has(ext)
+}
 </script>
 
 <style scoped lang="scss">
@@ -1163,6 +1630,8 @@ onMounted(() => {
     color: #409eff;
     margin-right: 12px;
     flex-shrink: 0;
+    position: relative; /* 必须为父级开启定位 */
+    overflow: hidden; /* 保证内部遮罩不超出圆角 */
   }
 
   .file-info {
@@ -1211,5 +1680,153 @@ onMounted(() => {
   justify-content: center;
   padding-top: 20px;
   border-top: 1px solid #ebeef5;
+}
+
+.code-extract-area {
+  .el-input-group__append {
+    background-color: var(--el-color-primary);
+    color: white;
+    &:hover {
+      background-color: var(--el-color-primary-light-3);
+    }
+  }
+}
+
+/* 预览入口遮罩层 */
+.preview-mask {
+  position: absolute;
+  bottom: 0; /* 底部对齐 */
+  left: 0;
+  right: 0;
+  height: 30%; /* 覆盖图标下方约 1/3 */
+  background: rgba(128, 128, 128, 0.4); /* 默认半透明灰色 */
+  color: white;
+  font-size: 11px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(2px); /* 磨砂效果，让 UI 显得更高档 */
+  user-select: none;
+  z-index: 10;
+}
+
+/* 悬浮变蓝色 */
+.preview-mask:hover {
+  background: rgba(64, 158, 255, 0.9); /* Element Plus 品牌蓝 */
+  height: 40%; /* 悬浮时略微升高，增强交互感 */
+}
+
+.preview-body {
+  min-height: 400px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f8f9fb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.img-wrapper {
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+}
+
+.preview-content-img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+
+.video-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 3. 视频标签适配逻辑 */
+.preview-video {
+  /* 核心：确保视频不会超出容器边界 */
+  max-width: 100%;
+  max-height: 100%;
+
+  /* 自动适配：保持原始比例，且完整显示在容器内 */
+  object-fit: contain;
+
+  /* 移除浏览器默认边框/外轮廓 */
+  outline: none;
+
+  /* 确保控制栏有足够空间显示 */
+  display: block;
+}
+
+.archive-preview {
+  width: 100%;
+  background: #fff;
+  padding: 15px;
+  border-radius: 4px;
+
+  .archive-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #ebeef5;
+    margin-bottom: 10px;
+    font-weight: bold;
+    color: #606266;
+  }
+}
+
+.custom-tree-node {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  font-size: 14px;
+
+  .node-label {
+    margin-left: 8px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .node-size {
+    font-size: 12px;
+    color: #909399;
+    margin-left: 10px;
+  }
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 75vh;
+  border: none;
+  background: white;
+}
+
+.preview-footer-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  .warning-text {
+    font-size: 12px;
+    color: #f56c6c;
+    font-style: italic;
+  }
+}
+
+/* 深度选择器修改 Dialog 样式，让预览更沉浸 */
+:deep(.preview-dialog) {
+  .el-dialog__body {
+    padding: 10px 20px;
+  }
 }
 </style>

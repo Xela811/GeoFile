@@ -1,14 +1,21 @@
 package com.geofile.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.geofile.common.Result;
 import com.geofile.entity.File;
 import com.geofile.service.FileService;
+import com.geofile.util.RedisUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 文件删除 Controller
@@ -23,6 +30,9 @@ public class FileDeleteController {
 
     @Autowired
     private FileService fileService;
+
+    @Autowired
+    private RedisUtil redisUtil;
 
     /**
      * 通过上传令牌删除文件
@@ -97,6 +107,55 @@ public class FileDeleteController {
         } catch (Exception e) {
             log.error("验证文件所有权失败: fileId={}", fileId, e);
             return Result.error("验证失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 通过上传令牌删除同一批次的全部文件（与批量上传共用 uploadToken），并清理取件码相关 Redis 键
+     */
+    @DeleteMapping("/batch-by-upload-token")
+    @Operation(summary = "按批次删除文件", description = "使用批量上传返回的 uploadToken，删除该令牌下全部未删文件，并失效取件码绑定")
+    public Result<Map<String, Object>> deleteBatchByUploadToken(
+            @Parameter(description = "批量上传返回的上传令牌", required = true) @RequestParam String uploadToken) {
+        if (uploadToken == null || uploadToken.isBlank()) {
+            return Result.error("uploadToken 不能为空");
+        }
+        String token = uploadToken.trim();
+        try {
+            List<File> files = fileService.list(new LambdaQueryWrapper<File>()
+                    .eq(File::getUploadToken, token)
+                    .in(File::getStatus, Arrays.asList(1, 3)));
+
+            if (files == null || files.isEmpty()) {
+                String redisKey = "file:download:" + token;
+                Object codeObj = redisUtil.get(redisKey);
+                if (codeObj != null) {
+                    redisUtil.del("code:to:token:" + codeObj.toString());
+                }
+                redisUtil.del(redisKey);
+                return Result.error("未找到该批次文件或已全部删除");
+            }
+
+            for (File f : files) {
+                f.setStatus(0);
+                f.setDeleted(1);
+                fileService.updateById(f);
+            }
+
+            String redisDownloadKey = "file:download:" + token;
+            Object codeObj = redisUtil.get(redisDownloadKey);
+            if (codeObj != null) {
+                redisUtil.del("code:to:token:" + codeObj.toString());
+            }
+            redisUtil.del(redisDownloadKey);
+
+            log.info("批次删除成功: uploadToken={}, 文件数={}", token, files.size());
+            Map<String, Object> data = new HashMap<>();
+            data.put("deletedCount", files.size());
+            return Result.success(data);
+        } catch (Exception e) {
+            log.error("批次删除失败: uploadToken={}", token, e);
+            return Result.error("批次删除失败: " + e.getMessage());
         }
     }
 }
