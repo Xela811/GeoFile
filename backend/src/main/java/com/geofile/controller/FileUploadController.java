@@ -1,6 +1,8 @@
 package com.geofile.controller;
 
 import com.geofile.entity.*;
+import com.geofile.exception.DownloadException;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.CollectionUtils;
@@ -24,11 +26,13 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -237,7 +241,7 @@ public class FileUploadController {
      */
     @GetMapping("/download/{fileId}")
     @Operation(summary = "下载文件", description = "通过下载令牌验证后下载文件")
-    public ResponseEntity<Resource> downloadFile(
+    public ResponseEntity<?> downloadFile(
             @PathVariable Long fileId,
             @RequestParam String token) {
 
@@ -255,10 +259,11 @@ public class FileUploadController {
             }
 
             // 3. 读取文件内容
-            FileInputStream fis = new FileInputStream(filePath);
+            /*FileInputStream fis = new FileInputStream(filePath);
             byte[] fileContent = new byte[(int) filePath.length()];
             fis.read(fileContent);
-            fis.close();
+            fis.close();*/
+            FileSystemResource resource = new FileSystemResource(filePath);
 
             // 4. 设置响应头
             String encodedFileName = URLEncoder.encode(file.getOriginalName(), StandardCharsets.UTF_8)
@@ -274,14 +279,34 @@ public class FileUploadController {
             // 5. 返回文件内容
             return ResponseEntity.ok()
                     .headers(headers)
-                    .body(new ByteArrayResource(fileContent));
+                    .body(resource);
 
-        } catch (IllegalArgumentException e) {
-            log.error("下载失败: fileId={}, error={}", fileId, e.getMessage());
-            return ResponseEntity.badRequest().build();
+        } catch (DownloadException e) {
+            /*log.error("下载失败: fileId={}, error={}", fileId, e.getMessage());
+            return ResponseEntity.badRequest().build();*/
+            log.warn("拦截下载请求: {}", e.getMessage());
+            return redirectToErrorPage(e.getMessage());
         } catch (Exception e) {
-            log.error("下载文件失败: fileId={}", fileId, e);
-            return ResponseEntity.internalServerError().build();
+            /*log.error("下载文件失败: fileId={}", fileId, e);
+            return ResponseEntity.internalServerError().build();*/
+            log.error("下载接口崩溃", e);
+            return redirectToErrorPage("服务器繁忙，请稍后再试");
+        }
+    }
+
+    private ResponseEntity<?> redirectToErrorPage(String message) {
+        try {
+            // 对中文消息进行编码，防止 URL 乱码
+            String encodedMsg = URLEncoder.encode(message, StandardCharsets.UTF_8);
+            String targetUrl = "http://localhost:5173/error?msg=" + encodedMsg;
+
+            log.info("重定向至错误页: {}", targetUrl);
+
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(targetUrl))
+                    .build();
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().build();
         }
     }
 
@@ -342,6 +367,13 @@ public class FileUploadController {
         return Result.success(validIds);
     }
 
+    private static final Set<String> TEXT_EXTENSIONS = Stream.of(
+            "txt", "md", "log", "csv", "json", "xml", "yaml", "yml",
+            "ini", "env", "ts", "js", "vue", "html", "htm", "css",
+            "scss", "less", "java", "py", "go", "rs", "c", "cpp",
+            "h", "sql", "properties", "conf"
+    ).collect(Collectors.toSet());
+
     @GetMapping("/preview/{fileId}")
     public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token) {
         try {
@@ -354,21 +386,44 @@ public class FileUploadController {
             }
             Resource resource = new UrlResource(diskFile.toURI());
 
-            // 2. 增强型 Content-Type 识别
-            String contentType = Files.probeContentType(diskFile.toPath());
-            String fileName = fileEntity.getFileName().toLowerCase();
+//            // 2. 增强型 Content-Type 识别
+//            String contentType = Files.probeContentType(diskFile.toPath());
+//            String fileName = fileEntity.getFileName().toLowerCase();
+//
+//            // 兜底逻辑：如果是代码或文本，强制设为 text/plain 以便 iframe 渲染
+//            if (contentType == null || contentType.equals("application/octet-stream")) {
+//                if (fileName.endsWith(".txt") || fileName.endsWith(".java") ||
+//                        fileName.endsWith(".vue") || fileName.endsWith(".py") ||
+//                        fileName.endsWith(".md") || fileName.endsWith(".sql")) {
+//                    contentType = "text/plain; charset=utf-8"; // 指定 utf-8 防止中文乱码
+//                } else if (fileName.endsWith(".pdf")) {
+//                    contentType = "application/pdf";
+//                } else {
+//                    contentType = "application/octet-stream";
+//                }
+//            }
 
-            // 兜底逻辑：如果是代码或文本，强制设为 text/plain 以便 iframe 渲染
-            if (contentType == null || contentType.equals("application/octet-stream")) {
-                if (fileName.endsWith(".txt") || fileName.endsWith(".java") ||
-                        fileName.endsWith(".vue") || fileName.endsWith(".py") ||
-                        fileName.endsWith(".md") || fileName.endsWith(".sql")) {
-                    contentType = "text/plain; charset=utf-8"; // 指定 utf-8 防止中文乱码
-                } else if (fileName.endsWith(".pdf")) {
-                    contentType = "application/pdf";
-                } else {
-                    contentType = "application/octet-stream";
-                }
+            String originalFileName = fileEntity.getFileName();
+            String extension = "";
+
+            // 提取后缀（不含点）
+            int lastDotIndex = originalFileName.lastIndexOf(".");
+            if (lastDotIndex > 0) {
+                extension = originalFileName.substring(lastDotIndex + 1).toLowerCase();
+            }
+
+            // 核心 MIME 识别逻辑
+            String contentType = Files.probeContentType(diskFile.toPath());
+
+            // 满足你的要求：针对列表中的所有文本格式进行兜底
+            if (TEXT_EXTENSIONS.contains(extension)) {
+                // 关键安全点：无论 Files.probe 结果如何，强制设为 text/plain 避免 XSS 攻击
+                // 并通过 charset=utf-8 解决预览乱码问题
+                contentType = "text/plain; charset=utf-8";
+            } else if ("pdf".equals(extension)) {
+                contentType = "application/pdf";
+            } else if (contentType == null) {
+                contentType = "application/octet-stream";
             }
 
             // 3. 构建响应头
@@ -376,7 +431,7 @@ public class FileUploadController {
                     .contentType(MediaType.parseMediaType(contentType))
                     // 关键优化：inline 模式
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" +
-                            URLEncoder.encode(fileEntity.getFileName(), "UTF-8") + "\"")
+                            URLEncoder.encode(originalFileName, "UTF-8") + "\"")
                     // 关键修复：移除或配置 X-Frame-Options，允许 iframe 嵌入
                     // 注意：如果项目中开启了 Spring Security，还需要在配置类中设置 .frameOptions().disable()
                     .header("X-Frame-Options", "ALLOWALL")

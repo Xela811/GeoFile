@@ -4,7 +4,9 @@
       <template #header>
         <div class="card-header">
           <span>{{ title }}</span>
-          <el-tag type="info">{{ isUploading ? '上传中...' : '就绪' }}</el-tag>
+          <el-tag type="isUploading ? 'warning' : 'info'">{{
+            isUploading ? '上传中...' : '就绪'
+          }}</el-tag>
         </div>
       </template>
 
@@ -23,8 +25,9 @@
         :multiple="multiple"
         :limit="limit"
         v-model:file-list="fileList"
-        :on-remove="handleRemove"
+        :on-remove="handleDelete"
         :accept="accept"
+        :show-file-list="false"
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
         <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
@@ -36,32 +39,57 @@
       </el-upload>
 
       <!-- 上传进度 -->
-      <div v-if="showProgress" class="progress-section">
+      <div v-if="fileList.length > 0" class="progress-section">
         <div v-for="file in fileList" :key="file.uid" class="upload-item">
-          <div class="file-info">
-            <el-icon><Document /></el-icon>
-            <div class="file-name">{{ file.name }}</div>
+          <div class="item-content">
+            <div class="file-info">
+              <el-icon class="file-icon"><Document /></el-icon>
+              <div class="file-details">
+                <div class="name-row">
+                  <div class="file-name-wrapper">
+                    <span class="file-name" :title="file.name">{{ file.name }}</span>
+                  </div>
+                  <span class="file-size">{{ formatFileSize(file.size) }}</span>
+                </div>
+
+                <el-progress
+                  :percentage="file.percentage || 0"
+                  :status="
+                    file.status === 'success'
+                      ? 'success'
+                      : file.status === 'fail'
+                        ? 'exception'
+                        : ''
+                  "
+                  :stroke-width="12"
+                  class="custom-progress"
+                />
+
+                <div class="upload-meta" v-if="file.status === 'uploading'">
+                  <span v-if="file.uploadSpeed">速度: {{ file.uploadSpeed }}</span>
+                  <span v-if="file.remainingTime">预计剩余: {{ file.remainingTime }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="item-actions"
+              v-if="file.status !== 'success' && file.status !== 'uploading'"
+            >
+              <el-button
+                type="danger"
+                icon="Delete"
+                circle
+                size="small"
+                @click="handleDelete(file)"
+              />
+            </div>
           </div>
-          <el-progress
-            :percentage="calculateProgress(file)"
-            :status="file.status"
-            :indeterminate="file.status === 'uploading'"
-            :stroke-width="20"
-          />
-          <el-button
-            v-if="file.status === 'uploading'"
-            type="danger"
-            size="small"
-            text
-            @click="handleCancelUpload(file.uid)"
-          >
-            取消
-          </el-button>
         </div>
       </div>
 
       <!-- 操作按钮 -->
-      <div v-if="showActions" class="upload-actions">
+      <div class="upload-actions">
         <el-button
           type="primary"
           :loading="isUploading"
@@ -71,48 +99,15 @@
         >
           开始上传
         </el-button>
-        <el-button v-if="fileList.length > 0" @click="handleClear" :icon="Delete">
+        <el-button
+          v-if="fileList.length > 0"
+          :disabled="isUploading"
+          @click="handleClear"
+          :icon="Delete"
+        >
           清空列表
         </el-button>
       </div>
-
-      <!-- 分片上传对话框 -->
-      <el-dialog
-        v-model="showChunkDialog"
-        title="大文件分片上传"
-        width="500px"
-        :close-on-click-modal="false"
-      >
-        <div class="chunk-upload-container">
-          <el-form label-width="100px">
-            <el-form-item label="文件名">
-              <span>{{ currentFile?.name }}</span>
-            </el-form-item>
-            <el-form-item label="文件大小">
-              <span>{{ formatFileSize(currentFile?.size || 0) }}</span>
-            </el-form-item>
-            <el-form-item label="总分片数">
-              <el-input-number v-model="chunkUploadInfo.totalChunks" :min="1" readonly />
-            </el-form-item>
-            <el-form-item label="已上传">
-              <el-progress
-                :percentage="chunkUploadInfo.progress"
-                :status="chunkUploadInfo.status"
-              />
-              <div class="chunk-info">
-                已上传: {{ chunkUploadInfo.uploadedChunks }} / {{ chunkUploadInfo.totalChunks }}
-              </div>
-            </el-form-item>
-          </el-form>
-        </div>
-
-        <template #footer>
-          <el-button @click="showChunkDialog = false">取消</el-button>
-          <el-button type="primary" @click="handleStartChunkUpload" :loading="isChunkUploading">
-            开始分片上传
-          </el-button>
-        </template>
-      </el-dialog>
     </el-card>
 
     <!-- 上传成功/失败回调 -->
@@ -122,6 +117,7 @@
 </template>
 
 <script setup lang="ts">
+import axios from 'axios'
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { UploadInstance, UploadUserFile, UploadRawFile, UploadFile } from 'element-plus'
@@ -198,18 +194,6 @@ const emit = defineEmits<{
 const uploadRef = ref<UploadInstance>()
 const fileList = ref<UploadUserFile[]>([])
 const isUploading = ref(false)
-const isChunkUploading = ref(false)
-
-// 分片上传状态
-const showChunkDialog = ref(false)
-const currentFile = ref<UploadRawFile | null>(null)
-const chunkUploadInfo = ref({
-  uploadId: '',
-  totalChunks: 0,
-  uploadedChunks: 0,
-  progress: 0,
-  status: 'uploading' as 'uploading' | 'completed' | 'error',
-})
 
 // 成功/失败的文件
 const successFiles = ref<UploadUserFile[]>([])
@@ -255,23 +239,10 @@ const allowedTypes = [
   'csv',
 ]
 const FORBIDDEN_EXTS = ['jsp', 'php', 'asp', 'aspx', 'sh', 'py', 'bat']
-const maxSize = 1024 * 1024 * 1024 // 1GB
+const maxSize = 5 * 1024 * 1024 * 1024 // 5GB
 
 // 处理文件选择
 const handleFileChange = (file: UploadUserFile) => {
-  /*// 验证文件类型
-  const extension = getExtension(file.name)
-  if (!allowedTypes.includes(extension)) {
-    ElMessage.error(`不支持的文件类型: ${extension}`)
-    return false
-  }
-
-  if (file.size && file.size > maxSize) {
-    ElMessage.error('文件大小超过限制（100MB）')
-    return false
-  }
-
-  return true*/
   const fileName = file.name
   const extension = getExtension(fileName)
 
@@ -289,7 +260,7 @@ const handleFileChange = (file: UploadUserFile) => {
 
   // --- 逻辑 B: 大小硬性拦截 ---
   if (file.size && file.size > maxSize) {
-    ElMessage.error('文件大小超过限制（1GB）')
+    ElMessage.error('文件大小超过限制（5GB）')
 
     const index = fileList.value.findIndex((f) => f.uid === file.uid)
     if (index !== -1) {
@@ -308,174 +279,8 @@ const handleFileChange = (file: UploadUserFile) => {
   return true
 }
 
-// 开始上传
-/*const startUpload = async () => {
-  if (fileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文件')
-    return
-  }
-
-  // 检查是否需要配置下载限制
-  if (props.maxDownloads === 0 || props.validMinutes === 0) {
-    emit('require-limit-config')
-    return
-  }
-
-  isUploading.value = true
-
-  try {
-    // 获取位置信息
-    const savedLocationStr = localStorage.getItem('userLocation')
-    let locationData = null
-    if (savedLocationStr) {
-      try {
-        locationData = JSON.parse(savedLocationStr)
-        console.log('从 localStorage 获取位置信息:', locationData)
-
-        // 如果是固定坐标模式，添加警告
-        if (locationData.useFixedCoords) {
-          ElMessage.warning('开发测试模式：使用固定坐标上传文件，位置可能不准确')
-        }
-      } catch (error) {
-        console.error('解析位置信息失败:', error)
-        locationData = null
-      }
-    }
-
-    // 如果没有位置信息，显示提示
-    if (!locationData || !locationData.lat || !locationData.lng) {
-      ElMessage.info('未检测到位置信息，文件上传成功但不记录位置')
-    }
-
-    // 获取Token
-    const tokenRes = await fetch('/api/file/generate-download-token/{fileId}')
-    const { data: token } = await tokenRes.json()
-
-    // 决定使用哪个上传接口
-    const useLocationApi = locationData && locationData.lat && locationData.lng
-    const uploadUrl = useLocationApi ? '/api/file/upload-with-location' : props.uploadUrl
-
-    console.log('使用上传接口:', uploadUrl)
-    console.log('位置信息:', locationData)
-
-    // 逐个上传文件
-    const currentSuccessFiles: UploadUserFile[] = []
-
-    for (let i = 0; i < fileList.value.length; i++) {
-      const file = fileList.value[i]
-      if (!file) continue
-
-      try {
-        // 创建FormData
-        const formData = new FormData()
-        formData.append('file', file.raw!)
-
-        // --- 核心修改：如果存在位置信息，则附加到表单中 ---
-        let uploadLat = locationData?.lat
-        let uploadLng = locationData?.lng
-        let uploadRadius = locationData?.radius || 1000
-
-        // 如果在固定坐标模式，使用固定坐标
-        if (locationData?.useFixedCoords) {
-          uploadLat = FIXED_LAT
-          uploadLng = FIXED_LNG
-          uploadRadius = 1000 // 固定模式使用默认1000米
-          console.log('使用固定坐标添加到表单:', {
-            lat: uploadLat,
-            lng: uploadLng,
-            radius: uploadRadius,
-          })
-        } else if (locationData) {
-          console.log('添加位置参数到表单:', {
-            lat: locationData.lat,
-            lng: locationData.lng,
-            radius: locationData.radius,
-          })
-        }
-
-        if (uploadLat && uploadLng) {
-          formData.append('lat', uploadLat.toString())
-          formData.append('lng', uploadLng.toString())
-          formData.append('radius', uploadRadius.toString())
-        }
-
-        // 添加下载限制参数
-        if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
-          formData.append('maxDownloads', props.maxDownloads.toString())
-          console.log('添加下载限制到表单:', { maxDownloads: props.maxDownloads })
-        }
-
-        // 添加有效时长参数（分钟）
-        if (props.validMinutes !== undefined && props.validMinutes > 0) {
-          formData.append('validMinutes', props.validMinutes.toString())
-          console.log('添加有效时长到表单:', { validMinutes: props.validMinutes })
-        }
-
-        // --- 4. 核心修改：添加“是否需要验证码”参数 ---
-        // 即使 needCode 是布尔值，formData 也会将其转为字符串 "true" 或 "false"
-        // 后端 Spring Boot 的 Boolean 类型会自动识别这两个字符串
-        if (props.needCode !== undefined) {
-          formData.append('needCode', props.needCode.toString())
-          console.log('添加验证码开关到表单:', { needCode: props.needCode })
-        }
-
-        // 上传文件
-        const response = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        })
-
-        const result: { code: number; data?: any; message?: string } = await response.json()
-
-        console.log('后端完整响应:', result)
-        console.log('result.code:', result.code)
-        console.log('result.data:', result.data)
-        console.log('result.message:', result.message)
-
-        if (result.code === 200) {
-          currentSuccessFiles.push(file)
-          ElMessage.success(`${file.name} 上传成功`)
-
-          // 发送 upload-success 事件，传递后端返回的文件数据（包含 uploadToken）
-          if (result.data) {
-            console.log('上传成功，文件数据:', result.data)
-            console.log('文件数据中的 uploadToken:', result.data.uploadToken)
-            emit('upload-success', result.data)
-          } else {
-            console.warn('result.data 为空，可能是后端未返回数据')
-          }
-        } else {
-          ElMessage.error(`${file.name}: ${result.message || '上传失败'}`)
-          file.status = 'fail'
-        }
-      } catch (e) {
-        console.error(e)
-        ElMessage.error(`${file.name}: 上传失败`)
-        file.status = 'fail'
-      }
-    }
-
-    // 发送成功事件
-    if (currentSuccessFiles.length > 0) {
-      successFiles.value = currentSuccessFiles
-      emit('success', currentSuccessFiles)
-      ElMessage.success(`成功上传 ${currentSuccessFiles.length} 个文件`)
-    }
-  } catch (e) {
-    const err = e as Error
-    uploadError.value = err
-    ElMessage.error('上传失败: ' + err.message)
-    emit('error', err)
-  } finally {
-    isUploading.value = false
-  }
-}*/
-
 // 开始上传 (批量改写版)
-const startUpload = async () => {
+/*const startUpload = async () => {
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择要上传的文件')
     return
@@ -592,6 +397,131 @@ const startUpload = async () => {
   } finally {
     isUploading.value = false
   }
+}*/
+
+const startUpload = async () => {
+  if (fileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的文件')
+    return
+  }
+
+  // 检查配置限制逻辑 (保持原样)
+  if (props.maxDownloads === 0 || props.validMinutes === 0) {
+    emit('require-limit-config')
+    return
+  }
+
+  isUploading.value = true
+
+  try {
+    // 1. 获取位置信息和 Token (保持原逻辑)
+    const savedLocationStr = localStorage.getItem('userLocation')
+    const locationData = JSON.parse(savedLocationStr || '{}')
+
+    // 获取 Token 的请求 (建议保持 fetch 或改为 axios)
+    const tokenRes = await fetch('/api/verification/token/download')
+    const { data: token } = await tokenRes.json()
+
+    // 计算总上传大小，用于进度权重分配
+    const totalBatchSize = fileList.value.reduce((sum, f) => sum + (f.size || 0), 0)
+
+    // 2. 准备 FormData
+    const formData = new FormData()
+    fileList.value.forEach((file) => {
+      if (file.raw) {
+        formData.append('files', file.raw)
+        // 初始化进度条为 0，状态为上传中
+        file.status = 'uploading'
+        file.percentage = 0
+      }
+    })
+
+    // 添加经纬度和业务参数 (保持原逻辑)
+    formData.append('lat', (locationData.useFixedCoords ? FIXED_LAT : locationData.lat).toString())
+    formData.append('lng', (locationData.useFixedCoords ? FIXED_LNG : locationData.lng).toString())
+    // ... 其他参数 append 同你之前的逻辑
+    // --- 业务参数处理 (保持原逻辑) ---
+    if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
+      formData.append('maxDownloads', props.maxDownloads.toString())
+    }
+    if (props.validMinutes !== undefined && props.validMinutes > 0) {
+      formData.append('validMinutes', props.validMinutes.toString())
+    }
+    if (props.needCode !== undefined) {
+      formData.append('needCode', props.needCode.toString())
+    }
+    if (props.needCode !== undefined) {
+      formData.append('needCode', props.needCode.toString())
+      console.log('添加验证码开关到表单:', { needCode: props.needCode })
+    }
+    console.log('发起批量上传，文件数量:', fileList.value.length)
+
+    // 3. 使用 Axios 执行请求并监听进度
+    const response = await axios.post('/api/file/upload/batch-with-location', formData, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      // --- 核心：监听上传进度 ---
+      onUploadProgress: (progressEvent) => {
+        if (progressEvent.total && totalBatchSize > 0) {
+          //const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+
+          // 更新所有正在上传的文件的进度条
+          /*fileList.value.forEach((file) => {
+            if (file.status === 'uploading') {
+              file.percentage = percentCompleted
+            }
+          })*/
+          const totalLoaded = progressEvent.loaded
+          let accumulatedSize = 0
+
+          fileList.value.forEach((file) => {
+            const fileSize = file.size || 0
+            const startThreshold = accumulatedSize
+            const endThreshold = accumulatedSize + fileSize
+
+            if (totalLoaded >= endThreshold) {
+              // 该文件已完全上传
+              file.percentage = 100
+            } else if (totalLoaded > startThreshold) {
+              // 进度正落在此文件区间内
+              const fileLoaded = totalLoaded - startThreshold
+              file.percentage = Math.round((fileLoaded / fileSize) * 100)
+            } else {
+              // 还没排到该文件
+              file.percentage = 0
+            }
+            accumulatedSize += fileSize
+          })
+        }
+      },
+    })
+
+    // 4. 处理响应结果
+    const result = response.data
+    if (result.code === 200) {
+      ElMessage.success(`成功上传 ${fileList.value.length} 个文件`)
+
+      fileList.value.forEach((f) => {
+        f.status = 'success'
+        f.percentage = 100
+      })
+
+      if (result.data) emit('upload-success', result)
+      emit('success', fileList.value)
+    } else {
+      throw new Error(result.message || '上传失败')
+    }
+  } catch (e: any) {
+    console.error('上传错误:', e)
+    fileList.value.forEach((f) => {
+      if (f.status === 'uploading') f.status = 'fail'
+    })
+    ElMessage.error(e.message || '上传过程中发生错误')
+    emit('error', e)
+  } finally {
+    isUploading.value = false
+  }
 }
 
 // 处理上传进度
@@ -629,8 +559,16 @@ const handleCancelUpload = (uid: UploadUserFile['uid']) => {
 }
 
 // 删除文件
-const handleRemove = (file: UploadUserFile) => {
-  ElMessage.info(`删除文件: ${file.name}`)
+const handleDelete = (file: UploadFile) => {
+  // 核心：直接过滤数组，Vue 会自动处理响应式更新
+  fileList.value = fileList.value.filter((f) => f.uid !== file.uid)
+
+  // 提示
+  ElMessage({
+    message: `已移出待上传列表`,
+    type: 'info',
+    duration: 2000,
+  })
 }
 
 // 清空列表
@@ -657,10 +595,7 @@ const formatFileSize = (bytes: number) => {
 // 获取文件扩展名
 const getExtension = (filename: string) => {
   if (!filename) return ''
-  /*const parts = filename.split('.')
-  if (parts.length === 0) return ''
-  const ext = parts.length > 1 ? (parts[parts.length - 1] ?? '') : ''
-  return ext.toLowerCase()*/
+
   // 1. 去除文件名首尾空格和末尾的点（防御 Windows 系统下的绕过漏洞）
   const trimmedName = filename.trim().replace(/\.+$/, '')
 
@@ -674,91 +609,6 @@ const getExtension = (filename: string) => {
 
   // 4. 截取并转为小写
   return trimmedName.substring(lastDotIndex + 1).toLowerCase()
-}
-
-// 开始分片上传
-const handleStartChunkUpload = async () => {
-  if (!currentFile.value) return
-
-  isChunkUploading.value = true
-  showChunkDialog.value = false
-
-  try {
-    // 1. 初始化分片上传
-    const initRes = await fetch('/api/file/upload/init', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('downloadToken') || ''}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        fileName: currentFile.value!.name,
-        fileSize: currentFile.value!.size.toString(),
-        chunkSize: '2097152', // 2MB
-      }),
-    })
-
-    const initResult = await initRes.json()
-    if (initResult.code !== 200) {
-      throw new Error(initResult.message)
-    }
-
-    const token = await getDownloadToken()
-
-    // 2. 逐个上传分片
-    for (let i = chunkUploadInfo.value.uploadedChunks; i < chunkUploadInfo.value.totalChunks; i++) {
-      chunkUploadInfo.value.uploadedChunks = i
-      chunkUploadInfo.value.progress = Math.round((i / chunkUploadInfo.value.totalChunks) * 100)
-
-      // 创建分片
-      const start = i * 2097152
-      const end = Math.min(start + 2097152, currentFile.value!.size)
-      const chunk = currentFile.value!.slice(start, end)
-
-      // 上传分片
-      const chunkFormData = new FormData()
-      chunkFormData.append('file', chunk)
-      chunkFormData.append('fileName', currentFile.value!.name)
-      chunkFormData.append('chunkIndex', i.toString())
-      chunkFormData.append('totalChunks', chunkUploadInfo.value.totalChunks.toString())
-
-      const chunkRes = await fetch('/api/file/upload/chunk', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: chunkFormData,
-      })
-
-      if (chunkRes.status !== 200) {
-        throw new Error('分片上传失败')
-      }
-    }
-
-    // 3. 合并分片
-    const mergeRes = await fetch('/api/file/upload/merge', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('downloadToken') || ''}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        fileName: currentFile.value!.name,
-        totalChunks: chunkUploadInfo.value.totalChunks.toString(),
-      }),
-    })
-
-    const mergeResult = await mergeRes.json()
-    if (mergeResult.code === 200) {
-      ElMessage.success('分片上传成功')
-    } else {
-      throw new Error(mergeResult.message)
-    }
-  } catch (error) {
-    ElMessage.error('分片上传失败: ' + (error as Error).message)
-  } finally {
-    isChunkUploading.value = false
-  }
 }
 
 // 获取下载Token
@@ -792,27 +642,100 @@ defineExpose({
 
 .progress-section {
   margin-top: 20px;
+  max-height: 400px;
+  overflow-y: auto;
 
   .upload-item {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 16px;
-    background: #f5f7fa;
-    border-radius: 4px;
-    margin-bottom: 10px;
+    background: #ffffff;
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    transition: all 0.3s;
+
+    &:hover {
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+    }
+
+    .item-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
 
     .file-info {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      align-items: flex-start;
+      gap: 12px;
       flex: 1;
 
-      .file-name {
+      .file-icon {
+        font-size: 24px;
+        color: #409eff;
+        margin-top: 4px;
+      }
+
+      .file-details {
         flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        min-width: 0;
+
+        .name-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+
+          .file-name-wrapper {
+            flex: 1;
+            min-width: 0;
+
+            .file-name {
+              display: inline-block;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              font-size: 14px;
+              font-weight: 500;
+              color: #303133;
+
+              white-space: normal; // 允许换行
+              word-break: break-all; // 强制长单词/链接换行，防止撑开容器
+              line-height: 1.4; // 增加行高防止多行时太挤
+            }
+          }
+
+          .file-size {
+            flex-shrink: 0;
+            font-size: 12px;
+            color: #909399;
+            background: #f0f2f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            white-space: nowrap;
+          }
+        }
+
+        .custom-progress {
+          margin: 8px 0;
+        }
+
+        .upload-meta {
+          display: flex;
+          gap: 16px;
+          font-size: 11px;
+          color: #67c23a; // 使用绿色强调速度信息
+        }
+      }
+    }
+
+    .item-actions {
+      flex-shrink: 0;
+      margin-left: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      align-self: flex-start;
+      &.success-icon {
+        width: 24px; // 成功的勾可以给一个较窄的宽度
       }
     }
   }
@@ -823,15 +746,5 @@ defineExpose({
   gap: 12px;
   justify-content: center;
   margin-top: 20px;
-}
-
-.chunk-upload-container {
-  padding: 20px 0;
-}
-
-.chunk-info {
-  margin-top: 10px;
-  font-size: 14px;
-  color: #909399;
 }
 </style>

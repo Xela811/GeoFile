@@ -39,7 +39,7 @@ public class FileValidator {
     );
 
     // 最大文件大小（1GB）
-    private static final long MAX_FILE_SIZE = 1024 * 1024 * 1024;
+    private static final long MAX_FILE_SIZE = 5L * 1024 * 1024 * 1024;
 
     /**
      * 验证文件类型
@@ -83,25 +83,7 @@ public class FileValidator {
         // 只要不是黑名单里的脚本，Matlab (mat)、Origin (opju)、PS (psd) 等都会返回 true
         return true;
     }
-//    public boolean isValidFileType(String originalFilename, String contentType) {
-//        if (originalFilename == null || originalFilename.isEmpty()) {
-//            return false;
-//        }
-//
-//        String extension = getFileExtension(originalFilename).toLowerCase();
-//
-//        // 检查扩展名是否在允许列表中
-////        for (String allowedType : ALLOWED_TYPES) {
-////            if (allowedType.equals(extension)) {
-////                return true;
-////            }
-////        }
-//        if (FORBIDDEN_TYPES.contains(extension)) {
-//            throw new IllegalArgumentException("出于安全考虑，禁止上传脚本文件");
-//        }
-//
-//        return true;
-//    }
+
 
     /**
      * 验证文件大小

@@ -76,14 +76,6 @@
             </el-descriptions>
           </div>
 
-          <!-- 搜索半径 -->
-          <div class="info-section">
-            <div class="info-title">🔍 搜索范围</div>
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="搜索半径">{{ searchRadius }}米</el-descriptions-item>
-            </el-descriptions>
-          </div>
-
           <!-- 完整地址预览 -->
           <div v-if="locationInfo.formattedAddress" class="formatted-address">
             <h3>📄 完整地址预览</h3>
@@ -101,7 +93,7 @@
         <template #header>
           <div class="card-header">
             <span>🔍 发现文件 ({{ nearbyFiles.length }} / {{ paginationInfo.total || 0 }})</span>
-            <div class="code-extract-area" style="width: 250px">
+            <div class="code-extract-area">
               <el-input
                 v-model="extractCode"
                 placeholder="输入取件码提取文件"
@@ -118,37 +110,12 @@
               type="primary"
               :icon="Search"
               :disabled="!locationInfo?.lat || !locationInfo.lng"
-              @click="handleSearch"
+              @click="handleSearch('public')"
             >
-              重新搜索
+              搜索附近文件
             </el-button>
           </div>
         </template>
-
-        <!-- 搜索参数设置 -->
-        <div class="search-params">
-          <el-form :inline="true">
-            <el-form-item label="搜索半径">
-              <el-slider
-                v-model="searchRadius"
-                :min="100"
-                :max="5000"
-                :step="100"
-                :format-tooltip="(val) => val + '米'"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :icon="Search"
-                :loading="filesLoading"
-                @click="handleSearch"
-              >
-                开始搜索
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </div>
 
         <!-- 文件搜索框 -->
         <div class="file-search-box">
@@ -164,7 +131,7 @@
             v-model="searchFileType"
             placeholder="选择文件类型"
             clearable
-            style="width: 150px"
+            style="width: 130px"
             @change="handleSearch"
           >
             <el-option label="全部类型" value="" />
@@ -176,12 +143,24 @@
             <el-option label="压缩包" value="zip" />
             <el-option label="其他" value="other" />
           </el-select>
-          <el-button type="primary" :icon="Search" :loading="filesLoading" @click="handleSearch">
-            搜索
-          </el-button>
-          <el-button v-if="searchKeyword || searchFileType" @click="handleResetSearch">
-            重置
-          </el-button>
+          <div class="search-btn-group">
+            <el-button
+              style="width: 65px"
+              type="primary"
+              :icon="Search"
+              :loading="filesLoading"
+              @click="handleSearch"
+            >
+              搜索
+            </el-button>
+            <el-button
+              style="width: 50px"
+              v-if="searchKeyword || searchFileType"
+              @click="handleResetSearch"
+            >
+              重置
+            </el-button>
+          </div>
         </div>
 
         <!-- 文件列表 -->
@@ -202,11 +181,16 @@
             <div class="file-info">
               <div class="file-name">{{ file.fileName }}</div>
               <div class="file-meta">
-                <span>{{ formatFileSize(file.fileSize) }}</span>
-                <span class="divider">|</span>
-                <span>{{ file.uploadTime }}</span>
-                <span class="divider">|</span>
-                <span>{{ locationService.formatDistance(file.distance!) }}距离</span>
+                <span
+                  ><el-icon><Document /></el-icon>{{ formatFileSize(file.fileSize) }}</span
+                >
+                <span v-if="file.isPrivate !== 1"
+                  ><el-icon><Location /></el-icon
+                  >{{ locationService.formatDistance(file.distance!) }}距离</span
+                >
+                <span
+                  ><el-icon><Clock /></el-icon>{{ file.uploadTime }}</span
+                >
               </div>
             </div>
             <div class="file-actions">
@@ -330,12 +314,19 @@
         <!-- 空状态 -->
         <el-empty
           v-if="nearbyFiles.length === 0"
-          :description="locationInfo ? '附近没有找到文件，快上传您的文件吧！' : '请先获取位置信息'"
+          :description="
+            locationInfo ? '附近没有找到文件，快点击上传您的文件吧！' : '请先获取位置信息'
+          "
         >
-          <template #extra v-if="locationInfo">
-            <el-button type="primary" :icon="Upload" @click="showUploadDialog = true">
-              立即上传文件
-            </el-button>
+          <template #description>
+            <p v-if="locationInfo">
+              附近没有找到文件，快
+              <router-link to="/upload" class="clickable-link">点击上传您的文件</router-link> 吧！
+            </p>
+            <p v-else>
+              我们需要您的位置信息来发现附近的文件
+              <el-button type="primary" link @click="handleGetCurrentLocation">立即获取</el-button>
+            </p>
           </template>
         </el-empty>
 
@@ -346,8 +337,9 @@
             v-model:page-size="paginationInfo.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="paginationInfo.total"
-            layout="total, sizes, prev, pager, next, jumper"
+            layout=" sizes, prev, pager, next, jumper"
             background
+            small
             @size-change="handleSizeChange"
             @current-change="handleCurrentChange"
           />
@@ -365,10 +357,14 @@
       </el-dialog>
 
       <!-- 文件详情对话框 -->
-      <el-dialog v-model="showDetailDialog" title="文件详情" width="600px">
+      <el-dialog v-model="showDetailDialog" title="文件详情" width="95%" style="max-width: 600px">
         <div v-if="selectedFile" class="file-detail">
           <el-descriptions :column="1" border>
-            <el-descriptions-item label="文件名">{{ selectedFile.fileName }}</el-descriptions-item>
+            <el-descriptions-item label="文件名"
+              ><div class="long-text-wrapper">
+                {{ selectedFile.fileName }}
+              </div></el-descriptions-item
+            >
             <el-descriptions-item label="文件类型">{{
               selectedFile.fileType
             }}</el-descriptions-item>
@@ -481,6 +477,52 @@
               <el-icon><Link /></el-icon>
               复制链接
             </el-button>
+            <el-popover
+              placement="top"
+              :width="220"
+              trigger="click"
+              popper-style="padding: 15px; text-align: center;"
+            >
+              <template #reference>
+                <el-button size="large" type="info" plain>
+                  <el-icon><View /></el-icon>
+                  二维码分享
+                </el-button>
+              </template>
+
+              <div>
+                <div v-if="isMaxedOut" class="status-alert error">
+                  <el-icon><Warning /></el-icon>
+                  <span>下载次数已达上限</span>
+                </div>
+                <div v-else-if="currentFileIsPrivate" class="status-alert private">
+                  <el-icon><Lock /></el-icon>
+                  <span>私密文件：扫码即下</span>
+                </div>
+                <div v-else class="status-alert public">
+                  <el-icon><Location /></el-icon>
+                  <span>公开文件：1km地理限制</span>
+                </div>
+
+                <div class="qr-wrapper" v-if="!isMaxedOut">
+                  <qrcode-vue
+                    :value="currentDownloadUrl"
+                    :size="180"
+                    level="H"
+                    render-as="svg"
+                    :image-settings="{
+                      src: currentFileIsPrivate ? LOCK_ICON : LOCATION_ICON,
+                      width: 40,
+                      height: 40,
+                      excavate: true,
+                    }"
+                  />
+                  <p style="margin-top: 10px; font-size: 12px; color: #909399">
+                    {{ currentFileIsPrivate ? '此链接已授权，扫码直接下载' : '请在范围内扫码下载' }}
+                  </p>
+                </div>
+              </div>
+            </el-popover>
             <el-button
               v-if="selectedFile && isFileOwner(selectedFile.id)"
               type="danger"
@@ -499,7 +541,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Location,
@@ -522,8 +564,10 @@ import FileUpload from '@/components/FileUpload.vue'
 import locationService from '@/services/locationService'
 import type { LocationInfo, NearbyFile } from '@/services/locationService'
 import { reconcileMyUploadedFiles } from '@/services/reconcileService'
+import QrcodeVue from 'qrcode.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 // 位置信息
 const locationInfo = ref<LocationInfo | null>(null)
@@ -564,6 +608,17 @@ const showUploadDialog = ref(false)
 // 文件详情对话框
 const showDetailDialog = ref(false)
 const selectedFile = ref<NearbyFile | null>(null)
+
+// 定义图标地址
+const LOCK_ICON = 'https://api.iconify.design/ep:lock.svg?color=%2367c23a' // 绿色锁
+const LOCATION_ICON = 'https://api.iconify.design/ep:location.svg?color=%23e6a23c' // 橙色定位针
+
+// 计算当前选中文件的下载链接
+const currentDownloadUrl = computed(() => {
+  if (!selectedFile.value) return ''
+  // 保持和你 copyFileLink 函数中的逻辑一致
+  return `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+})
 
 // 获取坐标（支持开发测试使用固定坐标）
 const getCoordinates = async (): Promise<{ lat: number; lng: number }> => {
@@ -622,15 +677,20 @@ const handleGetCurrentLocation = async () => {
 }
 
 // 搜索附近文件（会退出「取件码私有列表」视图）
-const handleSearch = async () => {
+const handleSearch = async (mode = 'keep') => {
   if (!locationInfo.value?.lat || !locationInfo.value?.lng) {
     ElMessage.warning('请先获取位置信息')
     return
   }
 
-  isExtractListView.value = false
+  if (mode === 'public') {
+    activeExtractCode.value = '' // 只有明确说要搜附近时，才清空码
+    extractCode.value = ''
+  }
+
+  /*isExtractListView.value = false
   activeExtractCode.value = ''
-  extractedFilesFull.value = []
+  extractedFilesFull.value = []*/
 
   console.log('开始搜索附近文件:', {
     lat: locationInfo.value.lat,
@@ -640,11 +700,14 @@ const handleSearch = async () => {
     fileType: searchFileType.value,
     pageNum: paginationInfo.value.pageNum,
     pageSize: paginationInfo.value.pageSize,
+    activeExtractCode: activeExtractCode.value,
   })
 
   try {
     filesLoading.value = true
-    ElMessage.info('正在搜索附近文件...')
+    if (mode === 'public') {
+      ElMessage.info('正在搜索附近文件...')
+    }
 
     const result = await locationService.getNearbyFiles(
       locationInfo.value.lat,
@@ -655,6 +718,9 @@ const handleSearch = async () => {
       searchFileType.value,
       paginationInfo.value.pageNum,
       paginationInfo.value.pageSize,
+      undefined, // sortBy (如果没传，补个 undefined)
+      undefined, // sortOrder (如果没传，补个 undefined)
+      activeExtractCode.value,
     )
 
     console.log('搜索结果:', result)
@@ -677,8 +743,8 @@ const handleSearch = async () => {
         paginationInfo.value.hasNext = false
       }
 
-      const count = result.count || result.files.length
-      ElMessage.success(`找到 ${count} 个附近文件`)
+      const msg = activeExtractCode.value ? '已筛选私有文件列表' : `找到 ${result.count} 个附近文件`
+      ElMessage.success(msg)
     } else {
       console.warn('返回的数据结构不符合预期:', result)
       nearbyFiles.value = []
@@ -1034,8 +1100,11 @@ const TEXT_CODE_EXTS = new Set([
   'cpp',
   'h',
   'sql',
+  'properties',
+  'conf',
 ])
 const INSTALLER_EXTS = new Set(['exe', 'msi', 'apk', 'dmg', 'pkg'])
+const NATIVE_VIDEO_EXTS = new Set(['mp4', 'webm', 'ogg'])
 
 const getFileIcon = (fileType: string) => {
   const raw = (fileType || '').toLowerCase().trim()
@@ -1174,7 +1243,11 @@ const handleSizeChange = (size: number) => {
 const handleResetSearch = () => {
   searchKeyword.value = ''
   searchFileType.value = ''
+
   paginationInfo.value.pageNum = 1
+  if (activeExtractCode.value) {
+    ElMessage.info('已重置筛选条件，继续查看私有列表')
+  }
   handleSearch()
 }
 
@@ -1274,20 +1347,70 @@ onMounted(() => {
 const extractCode = ref('')
 const extractLoading = ref(false)
 
+// 封装提取逻辑
+const checkAndExtract = () => {
+  // 新增：如果当前不在首页或分享路径，不执行提取逻辑
+  if (route.path !== '/' && !route.path.startsWith('/s/')) {
+    return
+  }
+
+  // 1. 尝试从 Vue Router 对象获取 (常规做法)
+  let codeFromUrl = route.params.code || route.query.code
+
+  // 2. 如果 Router 没拿到 (Hash 模式下的冷启动 bug)，直接解析原生 Hash 字符串
+  if (!codeFromUrl) {
+    const hash = window.location.hash // 获取类似 "#/s/0WHNW"
+    if (hash && hash.includes('/s/')) {
+      // 这里的逻辑：分割字符串，取最后一个斜杠后面的部分
+      const parts = hash.split('/')
+      codeFromUrl = parts[parts.length - 1]
+    }
+  }
+
+  console.log('--- 提取码解析结果 ---')
+  console.log('原生 Hash:', window.location.hash)
+  console.log('解析到的 Code:', codeFromUrl)
+
+  if (codeFromUrl) {
+    // 自动填充输入框
+    extractCode.value = codeFromUrl
+
+    // 触发后端接口请求
+    setTimeout(() => {
+      handleExtractByCode()
+    }, 500)
+  }
+}
+
+onMounted(() => {
+  checkAndExtract()
+})
+
+// 关键：监听路由变化。
+// 如果用户从 /s/A 页面直接点击另一个链接跳到 /s/B，onMounted 不会重新触发
+watch(
+  () => route.params.code,
+  (newCode) => {
+    if (newCode) {
+      checkAndExtract()
+    }
+  },
+)
+
 /**
  * 通过取件码提取文件
  * 逻辑：后端根据 code 在 Redis 找到 batchUploadToken，再返回对应的文件列表
  */
 const handleExtractByCode = async () => {
-  if (!extractCode.value) {
+  const code = extractCode.value?.trim()
+  if (!code) {
     ElMessage.warning('请输入取件码')
     return
   }
 
   extractLoading.value = true
   try {
-    // 假设你的后端接口路径为 /api/file/extract/{code}
-    const response = await fetch(`/api/file/extract/${extractCode.value}`, {
+    /*const response = await fetch(`/api/file/extract/${extractCode.value}`, {
       method: 'GET',
     })
 
@@ -1312,6 +1435,20 @@ const handleExtractByCode = async () => {
       }
     } else {
       ElMessage.error(result.message || '提取失败，请检查取件码是否正确')
+    }*/
+    // 这意味着后续的所有搜索（包括分页和筛选）都会带上这个码
+    activeExtractCode.value = code
+
+    // 3. 重置分页信息，因为这是从第一页重新开始显示提取的内容
+    paginationInfo.value.pageNum = 1
+
+    // 4. 直接复用 handleSearch 逻辑
+    // 因为你在 handleSearch 内部已经加入了 locationService.getNearbyFiles(..., activeExtractCode.value)
+    await handleSearch()
+
+    // 5. 特殊处理：如果在 handleSearch 后发现没有结果，可能码是错的
+    if (nearbyFiles.value.length === 0) {
+      activeExtractCode.value = '' // 清空码，恢复状态
     }
   } catch (error) {
     console.error('提取文件出错:', error)
@@ -1320,28 +1457,6 @@ const handleExtractByCode = async () => {
     extractLoading.value = false
   }
 }
-
-// 预览处理函数
-/*const handlePreview = (file) => {
-  // 1. 检查是否有权限（私有文件必须有获取成功的 token）
-  // 提示：如果你在列表能看到这个文件，说明你已经输过取件码了
-  if (!file.downloadToken) {
-    ElMessage.warning('该文件需要验证取件码后方可预览')
-    return
-  }
-
-  // 2. 构造后端预览地址
-  // 假设你的后端服务地址在 base_url，路径是你刚才设计的接口
-  const previewUrl = `/api/file/preview/${file.id}?token=${file.downloadToken}`
-
-  // 3. 在新标签页打开预览
-  // 浏览器会自动根据 MIME 类型决定是渲染图片、播放视频还是 PDF 预览
-  window.open(previewUrl, '_blank')
-
-  // 提示：因为预览也计入下载，如果你希望前端列表的数字实时更新，
-  // 可以在这里手动给 file.downloadCount++ 或者重新对账
-  file.downloadCount++
-}*/
 
 // --- 新增预览相关的响应式变量 ---
 const previewVisible = ref(false)
@@ -1379,15 +1494,24 @@ const isInstaller = (fileType: string) => {
 
 // --- 重构后的预览入口函数 ---
 const handlePreview = async (file: NearbyFile) => {
+  if (!file) return
+
+  // 判断逻辑：如果设置了最大下载次数(maxDownloads > 0)，且当前次数已达到或超过上限
+  if (file.maxDownloads > 0 && file.downloadCount >= file.maxDownloads) {
+    ElMessage.error('该文件预览/下载次数已达上限，无法访问')
+    return
+  }
+
+  activeFile.value = file
   showInstallerInfo.value = false // 重置安装包标志
   previewUrl.value = '' // 清空预览链接
   archiveTree.value = [] // 清空压缩包树
+  previewLoading.value = false // 确保不会带着上次的 loading 状态打开
   if (!file.downloadToken) {
     ElMessage.warning('该文件需要验证取件码后方可预览')
     return
   }
 
-  activeFile.value = file
   const fileType = (file.fileType || '').toLowerCase().replace(/^\./, '').trim()
   if (isInstaller(file.fileType)) {
     // 不去 fetch 后端，直接展示一个精美的安装包图标和下载按钮
@@ -1411,49 +1535,45 @@ const handlePreview = async (file: NearbyFile) => {
     }
     return
   }
-  /*else {
-    previewLoading.value = true
 
-    // 这里的 t=Date.now() 非常关键，它能强迫浏览器绕过本地磁盘缓存获取最新的后端流
-    previewUrl.value = `/api/file/preview/${file.id}?token=${file.downloadToken}&t=${Date.now()}`
-    previewVisible.value = true
+  // --- D. 核心判定：浏览器是否能“真正”渲染该文件 ---
+  const isNativeVideo = NATIVE_VIDEO_EXTS.has(fileType)
+  const isNativeAudio = ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(fileType) // 常见浏览器原生支持
+  const isNativeDoc = fileType === 'pdf' || TEXT_CODE_EXTS.has(fileType)
+  const isNativeImage = IMAGE_EXTS.has(fileType)
 
-    // 乐观更新：预览即下载，立即反馈在 UI 上
+  // 只有满足原生支持条件的，才允许进入预览流
+  const canDirectPreview = isNativeImage || isNativeVideo || isNativeAudio || isNativeDoc
+
+  if (canDirectPreview) {
+    // 1. 只有能预览的才消耗下载次数
     if (typeof file.downloadCount === 'number') {
       file.downloadCount++
     }
-  }*/
-  // 只有 图片、视频、音频、PDF、代码文本 才允许发起预览请求
-  const canBrowserPreview =
-    isImage(fileType) || isVideo(fileType) || isAudio(fileType) || isDocOrText(fileType)
-
-  if (canBrowserPreview) {
-    // 执行正常的预览逻辑
+    // 2. 执行加载
     previewLoading.value = true
     previewUrl.value = `/api/file/preview/${file.id}?token=${file.downloadToken}&t=${Date.now()}`
     previewVisible.value = true
-
-    if (typeof file.downloadCount === 'number') {
-      file.downloadCount++
-    }
   } else {
-    // --- 拦截不支持的格式（如 .mat, .opju, .psd 等） ---
-    ElMessageBox.confirm(
-      `文件 ".${fileType}" 是专有格式，暂不支持在线预览。您可以直接下载后查看其内容。`,
-      '提示',
-      {
-        confirmButtonText: '立即下载',
-        cancelButtonText: '我知道了',
-        type: 'info',
-        distinguishCancelAndClose: true,
-      },
-    )
+    // --- E. 拦截逻辑：针对 avi, mkv, docx 等已知但不支持预览的格式 ---
+    // 这解决了你说的“一直加载”的问题
+    const tipMsg = `文件 ".${fileType}" 是专有格式，暂不支持在线预览。`
+    /*if (VIDEO_EXTS.has(fileType)) {
+      tipMsg = `视频格式 ".${fileType}" 编码受限，浏览器无法直接播放。`;
+    }*/
+
+    ElMessageBox.confirm(`${tipMsg}建议您直接下载到本地查看。`, '提示', {
+      confirmButtonText: '立即下载',
+      cancelButtonText: '我知道了',
+      type: 'info',
+      distinguishCancelAndClose: true,
+    })
       .then(() => {
-        // 如果用户点击“立即下载”，调用你已有的下载函数
-        handleDownload(file)
+        selectedFile.value = file
+        downloadFile()
       })
       .catch(() => {
-        // 用户点击关闭或取消，不执行任何操作
+        // 保持安静
       })
   }
 }
@@ -1475,6 +1595,10 @@ const isArchive = (fileType: string) => {
   const ext = (fileType || '').toLowerCase().replace(/^\./, '').trim()
   return ARCHIVE_EXTS.has(ext)
 }
+
+const currentFileIsPrivate = computed(() => {
+  return selectedFile.value?.isPrivate || false
+})
 </script>
 
 <style scoped lang="scss">
@@ -1561,6 +1685,54 @@ const isArchive = (fileType: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 新增：允许内容在空间不足时换行，并设置间距 */
+  flex-wrap: wrap;
+  gap: 12px;
+  > span {
+    order: 1;
+    white-space: nowrap;
+  }
+  .code-extract-area {
+    order: 2;
+    /* 设定一个理想宽度 */
+    flex-basis: 220px;
+    /* 如果剩余空间不足以容纳它和按钮，它会尝试占据更大空间并换行 */
+    flex-grow: 1;
+    max-width: 280px;
+    .el-input-group__append {
+      background-color: var(--el-color-primary);
+      color: white;
+      &:hover {
+        background-color: var(--el-color-primary-light-3);
+      }
+    }
+  }
+  .el-button {
+    order: 3;
+  }
+}
+
+/* 关键：针对移动端（小屏）的重排逻辑 */
+@media (max-width: 768px) {
+  .card-header {
+    /* 1. 让按钮的 order 变小，排到标题后面去 */
+    .el-button {
+      order: 2;
+    }
+
+    /* 2. 让输入框的 order 变大，掉到最下面 */
+    .code-extract-area {
+      order: 3;
+      flex: 1 1 100%; /* 强制占据 100% 宽度，独占一行 */
+      max-width: none; /* 移除大屏时的宽度限制 */
+      margin-top: 4px; /* 给第二行加点间距 */
+    }
+
+    /* 3. 确保标题和按钮分布在第一行的两头 */
+    > span {
+      flex: 1; /* 标题占据剩余空间，把按钮推向右侧 */
+    }
+  }
 }
 
 .location-info {
@@ -1599,6 +1771,17 @@ const isArchive = (fileType: string) => {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+  .search-btn-group {
+    display: flex;
+    align-items: center;
+    /* 1. 控制按钮之间的物理间距 (这里设为 4px，你可以根据需要调小) */
+    gap: 10px;
+
+    :deep(.el-button) {
+      /* 2. 必须强制清除 Element Plus 默认给第二个按钮加的 12px 左外边距 */
+      margin-left: 0 !important;
+    }
+  }
 }
 
 .file-list {
@@ -1643,17 +1826,25 @@ const isArchive = (fileType: string) => {
       font-weight: 500;
       color: #303133;
       margin-bottom: 4px;
-      white-space: nowrap;
+
+      word-break: break-all; /* 强制长英文/数字在字符间断行，防止撑开容器 */
+
+      /* 实现多行文本溢出显示省略号 (标准 WebKit 方法) */
+      display: -webkit-box;
+      -webkit-line-clamp: 2; /* 限制最多显示 2 行 */
+      -webkit-box-orient: vertical;
       overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
     }
 
     .file-meta {
-      font-size: 12px;
+      font-size: 11px;
       color: #909399;
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap; /* 空间不足自动换行 */
+      gap: 4px 12px; /* 纵向间距4px，横向间距12px */
 
       .divider {
         color: #dcdfe6;
@@ -1667,10 +1858,29 @@ const isArchive = (fileType: string) => {
 }
 
 .file-detail {
+  :deep(.el-descriptions__body table) {
+    table-layout: fixed;
+    width: 100%;
+  }
+
   .file-actions-dialog {
     margin-top: 24px;
     display: flex;
     gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .long-text-wrapper {
+    /* 1. 允许换行 */
+    word-break: break-all; /* 强制长数字/英文在字符间断行 */
+    white-space: normal; /* 确保正常换行 */
+  }
+
+  /* 针对详情弹窗内的所有 alert 进行字体调整 */
+  :deep(.el-alert) {
+    --el-alert-title-font-size: 13px; /* 标题字体大小 */
+    --el-alert-description-font-size: 13px; /* 描述字体大小 */
+    --el-alert-title-with-description-font-size: 15px;
   }
 }
 
@@ -1678,16 +1888,24 @@ const isArchive = (fileType: string) => {
   margin-top: 20px;
   display: flex;
   justify-content: center;
-  padding-top: 20px;
+  padding: 20px 10px;
   border-top: 1px solid #ebeef5;
-}
+  width: 100%;
+  box-sizing: border-box;
 
-.code-extract-area {
-  .el-input-group__append {
-    background-color: var(--el-color-primary);
-    color: white;
-    &:hover {
-      background-color: var(--el-color-primary-light-3);
+  /* 如果还是微量溢出，允许横向滚动而不是被裁切 */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+
+  :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 4px; /* 设置行间距和列间距 */
+
+    /* 让 sizes 和 jumper 在拥挤时能整块移动 */
+    .el-pagination__sizes,
+    .el-pagination__jump {
+      margin: 0;
     }
   }
 }
@@ -1821,6 +2039,55 @@ const isArchive = (fileType: string) => {
     color: #f56c6c;
     font-style: italic;
   }
+}
+
+.clickable-link {
+  color: #409eff;
+  text-decoration: none;
+  font-weight: bold; /* 加粗，增强引导性 */
+}
+
+.clickable-link:hover {
+  text-decoration: underline;
+}
+
+.status-alert {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  border: 1px solid transparent;
+}
+
+/* 私密文件样式 - 绿色系 */
+.status-alert.private {
+  background-color: #f0f9eb;
+  color: #67c23a;
+  border-color: #e1f3d8;
+}
+
+/* 公开文件样式 - 橙色系 */
+.status-alert.public {
+  background-color: #fdf6ec;
+  color: #e6a23c;
+  border-color: #faecd8;
+}
+
+/* 错误状态 - 红色系 */
+.status-alert.error {
+  background-color: #fef0f0;
+  color: #f56c6c;
+  border-color: #fde2e2;
+}
+
+.qr-wrapper {
+  background: #fff;
+  padding: 5px;
+  display: inline-block;
 }
 
 /* 深度选择器修改 Dialog 样式，让预览更沉浸 */

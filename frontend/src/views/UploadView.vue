@@ -31,7 +31,7 @@
       :max-downloads="downloadLimitConfig.maxDownloads"
       :valid-minutes="downloadLimitConfig.validMinutes"
       :need-code="downloadLimitConfig.needCode"
-      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 100MB"
+      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 5GB"
       @success="handleUploadSuccess"
       @upload-success="handleFileUploadSuccess"
       @error="handleUploadError"
@@ -66,7 +66,8 @@
         </div>
       </template>
       <p class="pickup-batches-hint">
-        仅当您在本浏览器以「私有」模式上传时记录；取件码与后端 Redis 一致过期。删除部分文件后点「刷新」可同步列表；「删除整批」将移除该令牌下全部文件并失效取件码。
+        仅当您在本浏览器以「私有」模式上传时记录；取件码与后端 Redis
+        一致过期。删除部分文件后点「刷新」可同步列表；「删除整批」将移除该令牌下全部文件并失效取件码。
       </p>
       <div v-for="batch in pickupBatches" :key="batch.code" class="pickup-batch-block">
         <div class="pickup-batch-toolbar">
@@ -76,7 +77,17 @@
             <el-button type="primary" link :icon="DocumentCopy" @click="copyPickupCode(batch.code)">
               复制
             </el-button>
+            <el-button
+              type="primary"
+              link
+              :icon="Share"
+              @click="openShare(batch.code)"
+              style="margin-left: 12px"
+            >
+              分享
+            </el-button>
           </div>
+
           <div class="pickup-meta">
             <span v-if="batch.validMinutes > 0" class="meta-item">
               约 {{ formatBatchExpire(batch) }} 失效（按上传时所设有效期估算）
@@ -95,7 +106,13 @@
             >
               刷新列表
             </el-button>
-            <el-button size="small" type="danger" plain :icon="Delete" @click="confirmDeleteEntireBatch(batch)">
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :icon="Delete"
+              @click="confirmDeleteEntireBatch(batch)"
+            >
               删除整批
             </el-button>
           </div>
@@ -103,7 +120,13 @@
         <el-alert v-if="batch.syncError" type="error" :closable="false" class="batch-alert">
           {{ batch.syncError }}
         </el-alert>
-        <el-table v-if="batch.files.length > 0" :data="batch.files" size="small" stripe class="pickup-file-table">
+        <el-table
+          v-if="batch.files.length > 0"
+          :data="batch.files"
+          size="small"
+          stripe
+          class="pickup-file-table"
+        >
           <el-table-column prop="fileName" label="文件名" min-width="160" show-overflow-tooltip />
           <el-table-column label="大小" width="100">
             <template #default="{ row }">
@@ -132,7 +155,8 @@
     <el-dialog
       v-model="showDownloadLimitDialog"
       title="下载限制配置"
-      width="500px"
+      width="90%"
+      style="max-width: 500px"
       :close-on-click-modal="false"
     >
       <el-form label-width="120px">
@@ -187,6 +211,22 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="shareVisible" title="分享文件批次" width="320px" center append-to-body>
+      <div style="display: flex; flex-direction: column; align-items: center">
+        <qrcode-vue :value="fullShareUrl" :size="200" level="H" render-as="svg" />
+
+        <p style="margin: 15px 0 5px; font-size: 14px; color: #606266">
+          扫码或发送链接，对方即可直接下载
+        </p>
+
+        <el-input v-model="fullShareUrl" readonly size="small" style="margin-top: 10px">
+          <template #append>
+            <el-button @click="copyLink">复制链接</el-button>
+          </template>
+        </el-input>
+      </div>
+    </el-dialog>
+
     <!-- 快捷操作 -->
     <!--<div class="quick-actions">
       <el-card>
@@ -209,12 +249,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Back, SuccessFilled, Refresh, DocumentCopy, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import FileUpload from '@/components/FileUpload.vue'
 import { reconcileMyUploadedFiles } from '@/services/reconcileService'
+import QrcodeVue from 'qrcode.vue'
+
+// --- 分享相关逻辑 ---
+const shareVisible = ref(false)
+const currentShareCode = ref('') // 当前点击分享的取件码
+
+// 生成动态链接
+const fullShareUrl = computed(() => {
+  // 生成格式如：http://yourdomain.com/#/s/TOKQE
+  // 注意：这里使用了你之前提到的 /s/ 路由格式
+  return `${window.location.origin}/#/s/${currentShareCode.value}`
+})
+
+// 打开分享弹窗
+const openShare = (code) => {
+  currentShareCode.value = code
+  shareVisible.value = true
+}
+
+// 复制链接
+const copyLink = () => {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(fullShareUrl.value)
+    ElMessage.success('分享链接已复制到剪贴板')
+  }
+}
 
 const PICKUP_BATCHES_STORAGE_KEY = 'geofile_private_pickup_batches'
 
@@ -297,11 +363,7 @@ const handleUploadSuccess = (files: UploadUserFile[]) => {
 }
 
 // 上传成功回调（包含 uploadToken）；与 FileUpload 对齐：可为 Result{ data }、FileVO[] 或单个 FileVO
-const handleFileUploadSuccess = (payload: {
-  code?: number
-  data?: unknown
-  message?: string
-}) => {
+const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; message?: string }) => {
   console.log('收到上传文件数据:', payload)
 
   const raw = payload && payload.data !== undefined ? payload.data : payload
@@ -316,7 +378,13 @@ const handleFileUploadSuccess = (payload: {
   }[] = []
   if (Array.isArray(raw)) {
     items = raw
-  } else if (raw && typeof raw === 'object' && raw !== null && 'id' in raw && 'uploadToken' in raw) {
+  } else if (
+    raw &&
+    typeof raw === 'object' &&
+    raw !== null &&
+    'id' in raw &&
+    'uploadToken' in raw
+  ) {
     items = [raw as (typeof items)[0]]
   }
   let saved = 0
@@ -409,9 +477,7 @@ function upsertPickupBatchFromUpload(
   if (existing) {
     existing.uploadToken = uploadToken
     existing.validMinutes = validMinutes
-    existing.files = items
-      .filter((x) => x.id != null)
-      .map((x) => mapVoToRow(x))
+    existing.files = items.filter((x) => x.id != null).map((x) => mapVoToRow(x))
     existing.lastSyncedAt = Date.now()
     existing.syncError = null
     savePickupBatchesToStorage()
@@ -423,9 +489,7 @@ function upsertPickupBatchFromUpload(
     uploadToken,
     validMinutes,
     createdAt,
-    files: items
-      .filter((x) => x.id != null)
-      .map((x) => mapVoToRow(x)),
+    files: items.filter((x) => x.id != null).map((x) => mapVoToRow(x)),
     lastSyncedAt: Date.now(),
     syncError: null,
     refreshing: false,
@@ -521,9 +585,13 @@ function formatSyncedAt(ts: number): string {
 
 async function deleteSingleInBatch(batch: PickupBatchDisplay, fileId: number) {
   try {
-    await ElMessageBox.confirm('确定删除该文件？删除后他人将无法通过取件码下载此文件。', '删除文件', {
-      type: 'warning',
-    })
+    await ElMessageBox.confirm(
+      '确定删除该文件？删除后他人将无法通过取件码下载此文件。',
+      '删除文件',
+      {
+        type: 'warning',
+      },
+    )
   } catch {
     return
   }
@@ -560,7 +628,11 @@ async function confirmDeleteEntireBatch(batch: PickupBatchDisplay) {
       `/api/file/batch-by-upload-token?uploadToken=${encodeURIComponent(batch.uploadToken)}`,
       { method: 'DELETE' },
     )
-    const json = (await res.json()) as { code: number; message?: string; data?: { deletedCount?: number } }
+    const json = (await res.json()) as {
+      code: number
+      message?: string
+      data?: { deletedCount?: number }
+    }
     if (json.code === 200) {
       const n = json.data?.deletedCount
       ElMessage.success(typeof n === 'number' ? `已删除 ${n} 个文件` : '整批已删除')

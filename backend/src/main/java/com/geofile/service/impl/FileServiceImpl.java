@@ -10,10 +10,12 @@ import com.geofile.entity.FileVO;
 import com.geofile.service.FileService;
 import com.geofile.service.DownloadLimitService;
 import com.geofile.mapper.FileMapper;
+import com.geofile.util.RedisUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -34,57 +36,192 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
     @Autowired
     private DownloadLimitService downloadLimitService;
 
+    @Autowired
+    private RedisUtil redisUtil; // 1. 注入实例
 
     @Override
     public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
                                          Integer pageNum, Integer pageSize,
-                                         String sortBy, String sortOrder, String keyword, String fileType) {
+                                         String sortBy, String sortOrder, String keyword, String fileType, String extractCode) {
         try {
-            log.info("搜索附近文件: lat={}, lng={}, radius={}, pageNum={}, pageSize={}, sortBy={}, sortOrder={}, keyword={}, fileType={}",
-                    lat, lng, radius, pageNum, pageSize, sortBy, sortOrder, keyword, fileType);
+//            log.info("搜索附近文件: lat={}, lng={}, radius={}, pageNum={}, pageSize={}, sortBy={}, sortOrder={}, keyword={}, fileType={}",
+//                    lat, lng, radius, pageNum, pageSize, sortBy, sortOrder, keyword, fileType);
+//
+//            // 计算经纬度范围
+//            // 1度纬度 ≈ 111km (111000米)
+//            // 1度经度 ≈ 111km * cos(lat) (米)
+//            double latDelta = radius / 111000.0;
+//            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+//
+//            double minLat = lat - latDelta;
+//            double maxLat = lat + latDelta;
+//            double minLng = lng - lngDelta;
+//            double maxLng = lng + lngDelta;
+//
+//            // 创建Page对象（MyBatis-Plus会自动拦截并实现物理分页）
+//            Page<File> page = new Page<>(pageNum, pageSize);
+//
+//            // 添加排序
+//            if (sortBy != null && !sortBy.isEmpty()) {
+//                boolean isAsc = "ASC".equalsIgnoreCase(sortOrder);
+//                page.addOrder(isAsc ? OrderItem.asc(sortBy) : OrderItem.desc(sortBy));
+//            } else {
+//                // 默认按上传时间降序
+//                page.addOrder(OrderItem.desc("upload_time"));
+//            }
+//
+//            // 构建查询条件
+//            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
+//                .between(File::getLocationLat, minLat, maxLat)
+//                .between(File::getLocationLng, minLng, maxLng)
+//                .in(File::getStatus, Arrays.asList(1, 3))
+//                .isNotNull(File::getLocationLat)
+//                .isNotNull(File::getLocationLng);
+//
+//            // 排除 ID
+//            if (excludeFileId != null) {
+//                queryWrapper.ne(File::getId, excludeFileId);
+//            }
+//
+//            // 搜索关键词（文件名模糊匹配）
+//            if (keyword != null && !keyword.isEmpty()) {
+//                queryWrapper.like(File::getFileName, keyword);
+//            }
+//
+//            if (fileType != null && !fileType.isEmpty()) {
+//                if ("other".equalsIgnoreCase(fileType)) {
+//                    // 如果是“其他”，查询后缀不在已知汇总列表里的所有文件
+//                    // 这样 .exe, .psd, .mat 等都会被包含进来
+//                    queryWrapper.notIn(File::getFileType, KNOWN_EXTENSIONS);
+//                } else {
+//                    List<String> extensions = getFileExtensionsByType(fileType);
+//                    if (!extensions.isEmpty()) {
+//                        queryWrapper.in(File::getFileType, extensions);
+//                    } else {
+//                        // 如果不是预定义类型（比如前端直接传了 "exe"），直接匹配
+//                        queryWrapper.eq(File::getFileType, fileType);
+//                    }
+//                }
+//            }
+//
+//            // 执行分页查询（MyBatis-Plus自动处理LIMIT）
+//            List<File> files = list(page, queryWrapper);
+//
+//            // 计算距离并转换为VO
+//            List<FileVO> result = new ArrayList<>();
+//            for (File file : files) {
+//                // 距离计算公式: distance = sqrt((lat2-lat1)^2 + (lng2-lng1)^2 * cos(lat1)^2)
+//                double distance = calculateDistance(lat, lng, file.getLocationLat(), file.getLocationLng());
+//                if (distance <= radius) {
+//                    FileVO vo = convertToFileVO(file);
+//                    vo.setDistance(distance);
+//                    result.add(vo);
+//                }
+//            }
+//
+//            log.info("附近文件搜索成功，找到 {} 个文件（共 {} 个）", result.size(), page.getTotal());
+//            return result;
 
-            // 计算经纬度范围
-            // 1度纬度 ≈ 111km (111000米)
-            // 1度经度 ≈ 111km * cos(lat) (米)
-            double latDelta = radius / 111000.0;
-            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-
-            double minLat = lat - latDelta;
-            double maxLat = lat + latDelta;
-            double minLng = lng - lngDelta;
-            double maxLng = lng + lngDelta;
-
-            // 创建Page对象（MyBatis-Plus会自动拦截并实现物理分页）
             Page<File> page = new Page<>(pageNum, pageSize);
-
-            // 添加排序
+            // 排序逻辑保持你原来的部分...
             if (sortBy != null && !sortBy.isEmpty()) {
                 boolean isAsc = "ASC".equalsIgnoreCase(sortOrder);
                 page.addOrder(isAsc ? OrderItem.asc(sortBy) : OrderItem.desc(sortBy));
             } else {
-                // 默认按上传时间降序
                 page.addOrder(OrderItem.desc("upload_time"));
             }
 
-            // 构建查询条件
-            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
-                .between(File::getLocationLat, minLat, maxLat)
-                .between(File::getLocationLng, minLng, maxLng)
-                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
-                .isNotNull(File::getLocationLat)
-                .isNotNull(File::getLocationLng);
+            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<>();
 
-            // 排除 ID
-            if (excludeFileId != null) {
-                queryWrapper.ne(File::getId, excludeFileId);
+            // --- 核心逻辑：区分有码和无码模式 ---
+            if (StringUtils.hasText(extractCode)) {
+                // 【有码模式】：忽视距离限制
+                String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
+                if (StringUtils.hasText(batchToken)) {
+                    // 只查这个取件码对应的文件包
+                    queryWrapper.eq(File::getUploadToken, batchToken);
+                    log.info("提取码模式：忽视距离限制，匹配Token: {}", batchToken);
+                } else {
+                    // 提取码无效，直接返回空
+                    return new ArrayList<>();
+                }
+            } else {
+                // 【无码模式】：执行1km周边过滤
+                double latDelta = radius / 111000.0;
+                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
+                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
+                        .eq(File::getIsPrivate, 0) // 没码只能看公开
+                        .isNotNull(File::getLocationLat)
+                        .isNotNull(File::getLocationLng);
             }
 
-            // 搜索关键词（文件名模糊匹配）
-            if (keyword != null && !keyword.isEmpty()) {
+            // --- 公共过滤逻辑（关键词、类型、状态） ---
+            queryWrapper.in(File::getStatus, Arrays.asList(1, 3));
+            if (excludeFileId != null) queryWrapper.ne(File::getId, excludeFileId);
+
+            // 任务四：支持对私有列表的关键词筛选
+            if (StringUtils.hasText(keyword)) {
                 queryWrapper.like(File::getFileName, keyword);
             }
 
-            // 按文件类型过滤（支持类型分类映射）
+            // 文件类型过滤逻辑（保持你原来的 getFileExtensionsByType 逻辑）
+            if (StringUtils.hasText(fileType)) {
+                if ("other".equalsIgnoreCase(fileType)) {
+                    queryWrapper.notIn(File::getFileType, KNOWN_EXTENSIONS);
+                } else {
+                    List<String> extensions = getFileExtensionsByType(fileType);
+                    if (!extensions.isEmpty()) queryWrapper.in(File::getFileType, extensions);
+                    else queryWrapper.eq(File::getFileType, fileType);
+                }
+            }
+
+            List<File> files = list(page, queryWrapper);
+
+            // 计算距离并封装 VO
+            List<FileVO> result = new ArrayList<>();
+            for (File file : files) {
+                FileVO vo = convertToFileVO(file);
+                // 无论哪种模式，如果文件有经纬度，都顺手算一下距离显示出来
+                if (file.getLocationLat() != null && file.getLocationLng() != null) {
+                    double distance = calculateDistance(lat, lng, file.getLocationLat(), file.getLocationLng());
+                    vo.setDistance(distance);
+                }
+                result.add(vo);
+            }
+            return result;
+        } catch (Exception e) {
+            log.error("搜索附近文件失败", e);
+            return new ArrayList<>();
+        }
+    }
+
+    @Override
+    public Long countNearbyFiles(Double lat, Double lng, Integer radius, String keyword, String fileType, String extractCode) {
+        try {
+//            // 计算经纬度范围
+//            double latDelta = radius / 111000.0;
+//            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+//
+//            double minLat = lat - latDelta;
+//            double maxLat = lat + latDelta;
+//            double minLng = lng - lngDelta;
+//            double maxLng = lng + lngDelta;
+//
+//            // 构建查询条件
+//            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
+//                .between(File::getLocationLat, minLat, maxLat)
+//                .between(File::getLocationLng, minLng, maxLng)
+//                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
+//                .isNotNull(File::getLocationLat)
+//                .isNotNull(File::getLocationLng);
+//
+//            // 搜索关键词
+//            if (keyword != null && !keyword.isEmpty()) {
+//                queryWrapper.like(File::getFileName, keyword);
+//            }
+//
+//            // 按文件类型过滤（支持类型分类映射）
 //            if (fileType != null && !fileType.isEmpty()) {
 //                List<String> extensions = getFileExtensionsByType(fileType);
 //                if (!extensions.isEmpty()) {
@@ -94,85 +231,38 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
 //                    queryWrapper.eq(File::getFileType, fileType);
 //                }
 //            }
-            if (fileType != null && !fileType.isEmpty()) {
-                if ("other".equalsIgnoreCase(fileType)) {
-                    // 如果是“其他”，查询后缀不在已知汇总列表里的所有文件
-                    // 这样 .exe, .psd, .mat 等都会被包含进来
-                    queryWrapper.notIn(File::getFileType, KNOWN_EXTENSIONS);
-                } else {
-                    List<String> extensions = getFileExtensionsByType(fileType);
-                    if (!extensions.isEmpty()) {
-                        queryWrapper.in(File::getFileType, extensions);
-                    } else {
-                        // 如果不是预定义类型（比如前端直接传了 "exe"），直接匹配
-                        queryWrapper.eq(File::getFileType, fileType);
-                    }
-                }
+//
+//            // 统计数量
+//            return count(queryWrapper);
+//
+            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<>();
+
+            if (StringUtils.hasText(extractCode)) {
+                // 有码模式
+                String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
+                if (!StringUtils.hasText(batchToken)) return 0L;
+                queryWrapper.eq(File::getUploadToken, batchToken);
+            } else {
+                // 无码模式
+                double latDelta = radius / 111000.0;
+                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
+                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
+                        .eq(File::getIsPrivate, 0)
+                        .isNotNull(File::getLocationLat)
+                        .isNotNull(File::getLocationLng);
             }
 
-            // 执行分页查询（MyBatis-Plus自动处理LIMIT）
-            List<File> files = list(page, queryWrapper);
-
-            // 计算距离并转换为VO
-            List<FileVO> result = new ArrayList<>();
-            for (File file : files) {
-                // 距离计算公式: distance = sqrt((lat2-lat1)^2 + (lng2-lng1)^2 * cos(lat1)^2)
-                double distance = calculateDistance(lat, lng, file.getLocationLat(), file.getLocationLng());
-                if (distance <= radius) {
-                    FileVO vo = convertToFileVO(file);
-                    vo.setDistance(distance);
-                    result.add(vo);
-                }
-            }
-
-            log.info("附近文件搜索成功，找到 {} 个文件（共 {} 个）", result.size(), page.getTotal());
-            return result;
-
-        } catch (Exception e) {
-            log.error("搜索附近文件失败", e);
-            return new ArrayList<>();
-        }
-    }
-
-    @Override
-    public Long countNearbyFiles(Double lat, Double lng, Integer radius, String keyword, String fileType) {
-        try {
-            // 计算经纬度范围
-            double latDelta = radius / 111000.0;
-            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-
-            double minLat = lat - latDelta;
-            double maxLat = lat + latDelta;
-            double minLng = lng - lngDelta;
-            double maxLng = lng + lngDelta;
-
-            // 构建查询条件
-            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
-                .between(File::getLocationLat, minLat, maxLat)
-                .between(File::getLocationLng, minLng, maxLng)
-                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
-                .isNotNull(File::getLocationLat)
-                .isNotNull(File::getLocationLng);
-
-            // 搜索关键词
-            if (keyword != null && !keyword.isEmpty()) {
-                queryWrapper.like(File::getFileName, keyword);
-            }
-
-            // 按文件类型过滤（支持类型分类映射）
-            if (fileType != null && !fileType.isEmpty()) {
+            // 公共过滤
+            queryWrapper.in(File::getStatus, Arrays.asList(1, 3));
+            if (StringUtils.hasText(keyword)) queryWrapper.like(File::getFileName, keyword);
+            if (StringUtils.hasText(fileType)) {
                 List<String> extensions = getFileExtensionsByType(fileType);
-                if (!extensions.isEmpty()) {
-                    queryWrapper.in(File::getFileType, extensions);
-                } else {
-                    // 如果不是预定义类型，直接匹配
-                    queryWrapper.eq(File::getFileType, fileType);
-                }
+                if (!extensions.isEmpty()) queryWrapper.in(File::getFileType, extensions);
+                else queryWrapper.eq(File::getFileType, fileType);
             }
 
-            // 统计数量
             return count(queryWrapper);
-
         } catch (Exception e) {
             log.error("统计附近文件数量失败", e);
             return 0L;
@@ -261,7 +351,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
     }
 
     private static final List<String> KNOWN_EXTENSIONS = Arrays.asList(
-            "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif",
+            "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif","heic","m4a",
             "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp", "mpeg", "mpg",
             "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "ape", "amr",
             "pdf",
@@ -281,7 +371,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
 
         switch (fileType.toLowerCase()) {
             case "image":
-                return Arrays.asList("png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif");
+                return Arrays.asList("png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif","heic","m4a");
             case "video":
                 return Arrays.asList("mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp", "mpeg", "mpg");
             case "audio":

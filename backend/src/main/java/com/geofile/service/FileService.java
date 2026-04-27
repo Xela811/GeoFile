@@ -29,7 +29,7 @@ public interface FileService extends IService<File> {
      */
     List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
                                     Integer pageNum, Integer pageSize,
-                                    String sortBy, String sortOrder, String keyword, String fileType);
+                                    String sortBy, String sortOrder, String keyword, String fileType, String extractCode);
 
     /**
      * 统计附近文件数量
@@ -40,7 +40,7 @@ public interface FileService extends IService<File> {
      * @param fileType 文件类型
      * @return 文件数量
      */
-    Long countNearbyFiles(Double lat, Double lng, Integer radius, String keyword, String fileType);
+    Long countNearbyFiles(Double lat, Double lng, Integer radius, String keyword, String fileType, String extractCode);
 
     /**
      * 更新文件地理位置信息

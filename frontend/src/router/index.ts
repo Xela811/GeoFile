@@ -30,6 +30,17 @@ const routes: RouteRecordRaw[] = [
     name: 'FileDetail',
     component: () => import('@/views/FileDetail.vue'),
   },
+  {
+    path: '/s/:code',
+    name: 'PrivateShare',
+    component: () => import('@/views/HomeView.vue'),
+    props: true,
+  },
+  {
+    path: '/error',
+    name: 'ErrorPage',
+    component: () => import('@/views/ErrorView.vue'),
+  },
 ]
 
 const router = createRouter({

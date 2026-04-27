@@ -149,6 +149,7 @@ class LocationService {
     pageSize: number = 10,
     sortBy?: string,
     sortOrder?: string,
+    extractCode?: string,
   ): Promise<LocationResponse> {
     try {
       const params = new URLSearchParams({
@@ -179,7 +180,13 @@ class LocationService {
         params.append('sortOrder', sortOrder)
       }
 
-      console.log(`正在搜索附近文件: lat=${lat}, lng=${lng}, radius=${radius}, keyword=${keyword}, fileType=${fileType}`)
+      if (extractCode) {
+        params.append('extractCode', extractCode)
+      }
+
+      console.log(
+        `正在搜索文件: mode=${extractCode ? '提取码' : '附近'}, lat=${lat}, lng=${lng}, radius=${radius}, keyword=${keyword}, fileType=${fileType}, extractCode=${extractCode}`,
+      )
 
       // 添加超时控制
       const controller = new AbortController()

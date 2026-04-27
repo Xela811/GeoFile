@@ -8,6 +8,7 @@ import com.geofile.service.*;
 import com.geofile.util.FileValidator;
 import com.geofile.util.JwtUtil;
 import com.geofile.util.RedisUtil;
+import com.geofile.exception.DownloadException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -516,21 +517,21 @@ public class FileUploadServiceImpl implements FileUploadService {
             File file = fileService.getById(fileId);
             if (file == null) {
                 log.warn("文件不存在: fileId={}", fileId);
-                throw new IllegalArgumentException("文件不存在");
+                throw new DownloadException("文件不存在或已被物理删除");
             }
 
             // 2. 验证下载令牌
             if (file.getDownloadToken() == null || !file.getDownloadToken().equals(downloadToken)) {
                 log.warn("下载令牌验证失败: fileId={}, token={}", fileId, downloadToken);
-                throw new IllegalArgumentException("无效的下载令牌");
+                throw new DownloadException("无效的下载令牌");
             }
 
             // 3. 检查文件状态
             // 如果 status 已经是 2(过期) 或 3(耗尽)，直接拦截
             if (file.getStatus() != null) {
-                if (file.getStatus() == 0 || file.getDeleted() == 1) throw new IllegalArgumentException("文件已被删除");
-                if (file.getStatus() == 2 || file.getExpireTime() != null && file.getExpireTime().before(new Date())) throw new IllegalArgumentException("文件已过期");
-                if (file.getStatus() == 3) throw new IllegalArgumentException("文件下载次数已达上限");
+                if (file.getStatus() == 0 || file.getDeleted() == 1) throw new DownloadException("文件已被分享者删除");
+                if (file.getStatus() == 2 || file.getExpireTime() != null && file.getExpireTime().before(new Date())) throw new DownloadException("该文件的分享链接已过期");
+                if (file.getStatus() == 3) throw new DownloadException("文件下载次数已达上限");
             }
 
             // 4. 获取下载限制配置
@@ -544,7 +545,12 @@ public class FileUploadServiceImpl implements FileUploadService {
 
             // 如果当前状态已经是 3，说明在残影期，拦截下载
             if (file.getStatus() != null && file.getStatus() == 3) {
-                throw new IllegalArgumentException("该文件下载次数已达上限");
+                throw new DownloadException("该文件下载次数已达上限");
+            }
+
+            // 二次检查（防御式编程）：防止并发情况下漏掉的状态
+            if (maxDownloads > 0 && currentCount >= maxDownloads) {
+                throw new DownloadException("该文件的下载次数已达上限");
             }
 
             // 正常计数更新
@@ -565,12 +571,11 @@ public class FileUploadServiceImpl implements FileUploadService {
 
             return file;
 
-        } catch (IllegalArgumentException e) {
-            log.error("文件下载失败: fileId={}, error={}", fileId, e.getMessage());
+        } catch (DownloadException e) {
             throw e;
         } catch (Exception e) {
-            log.error("文件下载失败: fileId={}", fileId, e);
-            throw new RuntimeException("文件下载失败: " + e.getMessage());
+            log.error("文件下载系统内部故障: fileId={}", fileId, e);
+            throw new RuntimeException("服务器处理下载请求失败: " + e.getMessage());
         }
     }
 
