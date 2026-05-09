@@ -3,6 +3,7 @@ package com.geofile.service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -13,6 +14,8 @@ import java.nio.file.StandardCopyOption;
  * 负责文件的本地存储和删除
  */
 public interface FileStorageService {
+
+    String saveFileCustomPath(InputStream is, String relativePath) throws IOException;
 
     /**
      * 保存文件

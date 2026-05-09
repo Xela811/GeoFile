@@ -149,6 +149,10 @@
             <scope>compile</scope>
         </dependency>
 
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+        </dependency>
         <!-- 移除重复的spring-boot-starter-test -->
         <!-- <dependency>
             <groupId>org.springframework.boot</groupId>

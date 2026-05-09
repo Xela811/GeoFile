@@ -3,6 +3,7 @@ package com.geofile.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.geofile.common.Result;
 import com.geofile.entity.File;
+import com.geofile.service.FileHashService;
 import com.geofile.service.FileService;
 import com.geofile.util.RedisUtil;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,6 +34,9 @@ public class FileDeleteController {
 
     @Autowired
     private RedisUtil redisUtil;
+
+    @Autowired
+    private FileHashService fileHashService;
 
     /**
      * 通过上传令牌删除文件
@@ -66,6 +70,13 @@ public class FileDeleteController {
             // 3. 检查文件是否已被删除
             if (file.getStatus() != null && file.getStatus() == 0 && file.getDeleted() == 1) {
                 return Result.error("文件已被删除");
+            }
+
+            // --- 核心修改：更新引用计数 ---
+            if (file.getFileHash() != null) {
+                // 调用你 Service 中的方法：该方法内部应执行 UPDATE t_file_hash SET reference_count = reference_count - 1
+                fileHashService.decrementReference(file.getFileHash());
+                log.info("物理文件引用计数减1: hash={}", file.getFileHash());
             }
 
             // 4. 执行软删除（更新状态为已删除）
@@ -137,6 +148,11 @@ public class FileDeleteController {
             }
 
             for (File f : files) {
+                // --- 核心修改：循环处理每一个文件的哈希引用 ---
+                if (f.getFileHash() != null) {
+                    fileHashService.decrementReference(f.getFileHash());
+                }
+
                 f.setStatus(0);
                 f.setDeleted(1);
                 fileService.updateById(f);

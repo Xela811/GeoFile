@@ -76,7 +76,7 @@ public class FileNearbyController {
             @Parameter(description = "文件类型（可选）") @RequestParam(required = false) String fileType,
             @Parameter(description = "取件码（可选）") @RequestParam(required = false) String extractCode) {
 
-        try {
+//        try {
             log.info("搜索附近文件: lat={}, lng={}, radius={}, pageNum={}, pageSize={}, keyword={}, fileType={}, extractCode={}",
                     lat, lng, radius, pageNum, pageSize, keyword, fileType, extractCode);
 
@@ -108,10 +108,6 @@ public class FileNearbyController {
             log.info("附近文件搜索成功，找到 {} 个文件", files.size());
             return Result.success(result);
 
-        } catch (Exception e) {
-            log.error("附近文件搜索失败", e);
-            return Result.error("附近文件搜索失败: " + e.getMessage());
-        }
     }
 
     /**

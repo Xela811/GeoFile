@@ -1,6 +1,8 @@
 package com.geofile.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import jakarta.validation.ConstraintViolationException;
@@ -44,5 +46,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public Result<String> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
         return Result.error("文件太大了！单文件不能超过限制大小。");
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Result<?>> handleIllegalArgumentException(IllegalArgumentException e) {
+        // 返回 400 Bad Request，强制前端 axios 进入 catch 块
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Result.error(e.getMessage()));
     }
 }

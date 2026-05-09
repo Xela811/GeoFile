@@ -41,6 +41,11 @@ public class File {
     private Long fileSize;
 
     /**
+     * 文件SHA-256哈希值 (新增)
+     */
+    private String fileHash;
+
+    /**
      * 文件存储路径
      */
     @TableField(value = "file_path")

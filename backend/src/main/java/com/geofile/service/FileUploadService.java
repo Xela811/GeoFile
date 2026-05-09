@@ -1,9 +1,11 @@
 package com.geofile.service;
 
+import com.geofile.dto.SecUploadDTO;
 import com.geofile.entity.File;
 import com.geofile.entity.FileVO;
 import com.geofile.entity.UploadInfo;
 import com.geofile.entity.UploadProgress;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -25,9 +27,9 @@ public interface FileUploadService {
 
     @Transactional
     FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius,
-                      Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken);
+                      Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, String sampleHash);
 
-    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode);
+    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, List<String> sampleHashes, HttpServletRequest request);
     /**
      * 上传多个文件
      * @param files 上传的文件列表
@@ -81,4 +83,7 @@ public interface FileUploadService {
     String generateDownloadToken(Long fileId);
 
     List<FileVO> verifyAndGetFiles(String code);
+
+    @Transactional
+    FileVO secUpload(SecUploadDTO dto, HttpServletRequest request);
 }

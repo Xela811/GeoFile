@@ -16,6 +16,7 @@
         method="post"
         class="upload-area"
         drag
+        :disabled="isUploading"
         :action="uploadUrl"
         :auto-upload="false"
         :on-change="handleFileChange"
@@ -30,7 +31,7 @@
         :show-file-list="false"
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
+        <div class="el-upload__text" v-if="!isUploading">将文件拖到此处，或<em>点击上传</em></div>
         <template #tip>
           <div class="el-upload__tip">
             {{ tip }}
@@ -91,14 +92,22 @@
       <!-- 操作按钮 -->
       <div class="upload-actions">
         <el-button
+          v-if="!isUploading"
           type="primary"
-          :loading="isUploading"
           :disabled="fileList.length === 0"
           @click="startUpload"
           :icon="Upload"
         >
           开始上传
         </el-button>
+        <el-button
+    v-else
+    type="danger"
+    @click="handleStopRequest"
+    :icon="CloseBold"
+  >
+    停止上传
+  </el-button>
         <el-button
           v-if="fileList.length > 0"
           :disabled="isUploading"
@@ -119,9 +128,11 @@
 <script setup lang="ts">
 import axios from 'axios'
 import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadInstance, UploadUserFile, UploadRawFile, UploadFile } from 'element-plus'
-import { UploadFilled, Upload, Delete, Document } from '@element-plus/icons-vue'
+import { UploadFilled, Upload, Delete, Document, CloseBold } from '@element-plus/icons-vue'
+import { sha256 } from 'js-sha256'
+import HashWorker from '../workers/hash.worker?worker';
 
 // 开发测试配置
 const FIXED_LAT = 38.914
@@ -279,127 +290,71 @@ const handleFileChange = (file: UploadUserFile) => {
   return true
 }
 
-// 开始上传 (批量改写版)
-/*const startUpload = async () => {
-  if (fileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文件')
-    return
+// 分片计算 SHA256
+const calculateSha256 = (file: File, onProgress?: (p: number) => void): Promise<string> => {
+  
+  return new Promise((resolve, reject) => {
+    // 1. 创建 Worker 实例
+    const worker = new HashWorker();
+
+    // 2. 发送文件对象给 Worker 开始计算
+    worker.postMessage({ file });
+
+    // 3. 监听来自 Worker 的消息
+    worker.onmessage = (e: MessageEvent) => {
+      const { type, data } = e.data;
+
+      switch (type) {
+        case 'progress':
+          // data 是 0-100 的整数
+          if (onProgress) onProgress(data);
+          break;
+        case 'success':
+          // data 是计算好的十六进制字符串
+          resolve(data);
+          worker.terminate(); // 任务完成，必须销毁线程
+          break;
+        case 'error':
+          reject(new Error(data));
+          worker.terminate(); // 出错也销毁线程
+          break;
+      }
+    };
+
+    // 4. 监听 Worker 本身的错误（比如脚本加载失败）
+    worker.onerror = (err) => {
+      console.error('Worker error:', err);
+      reject(new Error('Hash calculation worker failed'));
+      worker.terminate();
+    };
+  });
+};
+
+// 采样哈希：取首、中、尾各 1MB 快速计算一个特征值
+const calculateSampleHash = async (file: File): Promise<string> => {
+  const size = file.size;
+  const sampleLimit = 3 * 1024 * 1024; // 3MB 阈值
+  let combinedBlob: Blob;
+
+  if (size <= sampleLimit) {
+    // 小文件直接全量读取，结果 100% 准确
+    combinedBlob = file;
+  } else {
+    // 大文件取首、中、尾各 1MB
+    const offset = 1 * 1024 * 1024;
+    combinedBlob = new Blob([
+      file.slice(0, offset),
+      file.slice(Math.floor(size / 2) - 512 * 1024, Math.floor(size / 2) + 512 * 1024),
+      file.slice(size - offset, size)
+    ]);
   }
 
-  // 检查是否需要配置下载限制
-  if (props.maxDownloads === 0 || props.validMinutes === 0) {
-    emit('require-limit-config')
-    return
-  }
-
-  isUploading.value = true
-
-  try {
-    // 1. 获取位置信息逻辑 (保持原样)
-    const savedLocationStr = localStorage.getItem('userLocation')
-    let locationData = null
-    if (savedLocationStr) {
-      try {
-        locationData = JSON.parse(savedLocationStr)
-        if (locationData.useFixedCoords) {
-          ElMessage.warning('开发测试模式：使用固定坐标上传文件')
-        }
-      } catch (error) {
-        console.error('解析位置信息失败:', error)
-      }
-    }
-
-    if (!locationData || !locationData.lat || !locationData.lng) {
-      ElMessage.info('未检测到位置信息，文件上传成功但不记录位置')
-    }
-
-    // 2. 获取Token (保持原样)
-    const tokenRes = await fetch('/api/file/generate-download-token/{fileId}')
-    const { data: token } = await tokenRes.json()
-
-    // 3. 统一使用批量上传接口
-    const uploadUrl = '/api/file/upload/batch-with-location'
-
-    // 4. 创建 FormData 并封装所有数据
-    const formData = new FormData()
-
-    // --- 核心修改：将所有文件添加到同一个 Key (files) 中 ---
-    fileList.value.forEach((file) => {
-      if (file.raw) {
-        formData.append('files', file.raw) // 对应后端 @RequestParam("files")
-      }
-    })
-
-    // --- 位置参数处理 (保持原逻辑) ---
-    let uploadLat = locationData?.lat
-    let uploadLng = locationData?.lng
-    let uploadRadius = locationData?.radius || 1000
-
-    if (locationData?.useFixedCoords) {
-      uploadLat = FIXED_LAT
-      uploadLng = FIXED_LNG
-      uploadRadius = 1000
-    }
-
-    if (uploadLat && uploadLng) {
-      formData.append('lat', uploadLat.toString())
-      formData.append('lng', uploadLng.toString())
-      formData.append('radius', uploadRadius.toString())
-    }
-
-    // --- 业务参数处理 (保持原逻辑) ---
-    if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
-      formData.append('maxDownloads', props.maxDownloads.toString())
-    }
-    if (props.validMinutes !== undefined && props.validMinutes > 0) {
-      formData.append('validMinutes', props.validMinutes.toString())
-    }
-    if (props.needCode !== undefined) {
-      formData.append('needCode', props.needCode.toString())
-    }
-    if (props.needCode !== undefined) {
-      formData.append('needCode', props.needCode.toString())
-      console.log('添加验证码开关到表单:', { needCode: props.needCode })
-    }
-    console.log('发起批量上传，文件数量:', fileList.value.length)
-
-    // 5. 执行单次批量上传请求
-    const response = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    })
-
-    const result: { code: number; data?: any[]; message?: string } = await response.json()
-
-    if (result.code === 200) {
-      // 批量上传成功
-      ElMessage.success(`成功上传 ${fileList.value.length} 个文件`)
-
-      // 传递完整 Result，便于父组件从 data 中遍历全部 FileVO 并保存每个 uploadToken
-      if (result.data && result.data.length > 0) {
-        emit('upload-success', result)
-      }
-
-      emit('success', fileList.value)
-    } else {
-      ElMessage.error(`上传失败: ${result.message || '未知错误'}`)
-      // 将所有文件标记为失败
-      fileList.value.forEach((f) => (f.status = 'fail'))
-    }
-  } catch (e) {
-    const err = e as Error
-    uploadError.value = err
-    ElMessage.error('上传过程中发生错误: ' + err.message)
-    emit('error', err)
-  } finally {
-    isUploading.value = false
-  }
-}*/
+  const arrayBuffer = await combinedBlob.arrayBuffer();
+  return sha256(arrayBuffer);
+};
 
 const startUpload = async () => {
+  
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择要上传的文件')
     return
@@ -412,6 +367,7 @@ const startUpload = async () => {
   }
 
   isUploading.value = true
+  let sharedUploadToken = "";
 
   try {
     // 1. 获取位置信息和 Token (保持原逻辑)
@@ -419,36 +375,114 @@ const startUpload = async () => {
     const locationData = JSON.parse(savedLocationStr || '{}')
 
     // 获取 Token 的请求 (建议保持 fetch 或改为 axios)
-    const tokenRes = await fetch('/api/verification/token/download')
-    const { data: token } = await tokenRes.json()
+    //const tokenRes = await fetch('/api/verification/token/download')
+    //const { data: token } = await tokenRes.json()
 
     // 计算总上传大小，用于进度权重分配
     const totalBatchSize = fileList.value.reduce((sum, f) => sum + (f.size || 0), 0)
 
     // 2. 准备 FormData
     const formData = new FormData()
-    fileList.value.forEach((file) => {
+    let hasFilesToUpload = false; // 标记是否还有需要真正网络上传的文件
+    /*fileList.value.forEach((file) => {
       if (file.raw) {
         formData.append('files', file.raw)
         // 初始化进度条为 0，状态为上传中
         file.status = 'uploading'
         file.percentage = 0
       }
-    })
+    })*/
 
-    // 添加经纬度和业务参数 (保持原逻辑)
+// 遍历文件列表进行“预检”
+for (const file of fileList.value) {
+      if (!file.raw) continue;
+      
+      file.status = 'uploading';
+      
+
+    // --- 1. 采样快检 (毫秒级) ---
+    // 计算采样哈希（几乎瞬发）
+  
+
+      
+      const currentSampleHash = await calculateSampleHash(file.raw as File);
+      
+      
+      const quickCheck = await axios.post('/api/file/quick-check', {
+        size: file.raw.size,
+        sampleHash: currentSampleHash
+      });
+      let fileHash = "";
+
+      if (quickCheck.data.data.canPotentiallySecUpload) {
+          // 快检命中，才花时间算全量
+          fileHash = await calculateSha256(file.raw as File, (p) => {
+            file.percentage = Math.floor(p * 0.4); 
+          });
+      } else {
+          // 快检未命中，直接判定无法秒传
+          file.percentage = 40;
+      }
+      
+    
+    
+      // 2. 发起预检请求（你需要新增这个后端接口）
+      let isSecSuccess = false;
+      console.log('快检结果:', quickCheck.data.data.canPotentiallySecUpload);
+console.log('计算出的全量Hash:', fileHash);
+      if(fileHash) {
+      const checkRes = await axios.post('/api/file/sec-upload', {
+        
+          hash: fileHash,
+          fileName: file.raw.name,
+          // 携带地理位置和配置，确保秒传也能生成提取码
+          lat: (locationData.useFixedCoords ? FIXED_LAT : locationData.lat),
+          lng: (locationData.useFixedCoords ? FIXED_LNG : locationData.lng),
+          maxDownloads: props.maxDownloads,
+          validMinutes: props.validMinutes,
+          needCode: props.needCode,
+          uploadToken: sharedUploadToken
+
+      });
+      
+      if (checkRes.data.code === 200 && checkRes.data.data) {
+        
+        
+        // --- 分支 A: 秒传成功 ---
+        file.status = 'success';
+        file.percentage = 100;
+        // 如果这是第一个成功的秒传，记录下后端生成的 Token
+        // 这样后续的文件（无论是秒传还是普通上传）都能沿用它
+        if (!sharedUploadToken) {
+          sharedUploadToken = checkRes.data.data.uploadToken
+        }
+        // 直接触发成功回调，传入后端返回的 FileVO (包含 downloadCode)
+        emit('upload-success', checkRes.data,fileList.value.length); 
+        isSecSuccess = true;
+      }
+    }
+      if(!isSecSuccess) {
+        // --- 分支 B: 秒传失败，准备正常上传 ---
+        formData.append('files', file.raw);
+        formData.append('sampleHashes', currentSampleHash);
+        hasFilesToUpload = true;
+      }
+    }
+if(hasFilesToUpload){
+      // 将 sharedUploadToken 塞进 FormData
+      // 如果之前的秒传已经生成了 Token，后端会沿用；如果还没生成，后端会在这里生成
+      if (sharedUploadToken) {
+        formData.append('providedToken', sharedUploadToken) 
+      }
+    // 添加经纬度和业务参数
     formData.append('lat', (locationData.useFixedCoords ? FIXED_LAT : locationData.lat).toString())
     formData.append('lng', (locationData.useFixedCoords ? FIXED_LNG : locationData.lng).toString())
-    // ... 其他参数 append 同你之前的逻辑
-    // --- 业务参数处理 (保持原逻辑) ---
+    // --- 业务参数处理 ---
     if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
       formData.append('maxDownloads', props.maxDownloads.toString())
     }
     if (props.validMinutes !== undefined && props.validMinutes > 0) {
       formData.append('validMinutes', props.validMinutes.toString())
-    }
-    if (props.needCode !== undefined) {
-      formData.append('needCode', props.needCode.toString())
     }
     if (props.needCode !== undefined) {
       formData.append('needCode', props.needCode.toString())
@@ -458,24 +492,20 @@ const startUpload = async () => {
 
     // 3. 使用 Axios 执行请求并监听进度
     const response = await axios.post('/api/file/upload/batch-with-location', formData, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      
       // --- 核心：监听上传进度 ---
       onUploadProgress: (progressEvent) => {
         if (progressEvent.total && totalBatchSize > 0) {
-          //const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-
-          // 更新所有正在上传的文件的进度条
-          /*fileList.value.forEach((file) => {
-            if (file.status === 'uploading') {
-              file.percentage = percentCompleted
-            }
-          })*/
+          
           const totalLoaded = progressEvent.loaded
           let accumulatedSize = 0
 
           fileList.value.forEach((file) => {
+            // 如果文件已经通过秒传成功了，跳过进度计算
+        if (file.status === 'success') {
+          accumulatedSize += (file.size || 0)
+          return
+        }
             const fileSize = file.size || 0
             const startThreshold = accumulatedSize
             const endThreshold = accumulatedSize + fileSize
@@ -486,10 +516,13 @@ const startUpload = async () => {
             } else if (totalLoaded > startThreshold) {
               // 进度正落在此文件区间内
               const fileLoaded = totalLoaded - startThreshold
-              file.percentage = Math.round((fileLoaded / fileSize) * 100)
+              //file.percentage = Math.round((fileLoaded / fileSize) * 100)
+            // 映射逻辑：将上传进度 (0-100) 映射到总进度的 (40-100)
+            const uploadP = Math.round((fileLoaded / fileSize) * 100);
+                file.percentage = 40 + Math.floor(uploadP * 0.6);
             } else {
               // 还没排到该文件
-              file.percentage = 0
+              file.percentage = 40
             }
             accumulatedSize += fileSize
           })
@@ -500,18 +533,21 @@ const startUpload = async () => {
     // 4. 处理响应结果
     const result = response.data
     if (result.code === 200) {
-      ElMessage.success(`成功上传 ${fileList.value.length} 个文件`)
+      
+      //ElMessage.success(`成功上传 ${fileList.value.length} 个文件`)
 
       fileList.value.forEach((f) => {
         f.status = 'success'
         f.percentage = 100
       })
-
-      if (result.data) emit('upload-success', result)
+// 如果前面没生成 Token，这里是最后的同步机会
+if (!sharedUploadToken) sharedUploadToken = response.data.data[0].uploadToken
+      if (result.data) emit('upload-success', result, fileList.value.length)
       emit('success', fileList.value)
     } else {
       throw new Error(result.message || '上传失败')
     }
+  }
   } catch (e: any) {
     console.error('上传错误:', e)
     fileList.value.forEach((f) => {
@@ -522,6 +558,7 @@ const startUpload = async () => {
   } finally {
     isUploading.value = false
   }
+  
 }
 
 // 处理上传进度
@@ -574,6 +611,29 @@ const handleDelete = (file: UploadFile) => {
 // 清空列表
 const handleClear = () => {
   fileList.value = []
+}
+
+// 停止并刷新的逻辑
+const handleStopRequest = () => {
+  ElMessageBox.confirm(
+    '确定要停止上传吗？这会清空当前进度并刷新页面以确保状态重置。',
+    '提示',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '点错了',
+      type: 'warning',
+      buttonSize: 'default'
+    }
+  )
+    .then(() => {
+      // 用户点击了确定，直接刷新页面
+      // 这是最干净的“取消”方式，会自动中断所有 HTTP 请求和计算任务
+      window.location.reload()
+    })
+    .catch(() => {
+      // 用户点击了取消，什么也不做，上传继续
+      console.log('用户取消了停止操作')
+    })
 }
 
 // 计算进度

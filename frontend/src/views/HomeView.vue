@@ -709,6 +709,7 @@ const handleSearch = async (mode = 'keep') => {
       ElMessage.info('正在搜索附近文件...')
     }
 
+
     const result = await locationService.getNearbyFiles(
       locationInfo.value.lat,
       locationInfo.value.lng,
@@ -723,10 +724,19 @@ const handleSearch = async (mode = 'keep') => {
       activeExtractCode.value,
     )
 
+    
+
     console.log('搜索结果:', result)
 
     // 检查返回的数据结构
     if (result && result.files) {
+      if (activeExtractCode.value && result.files.length === 0) {
+        nearbyFiles.value = []
+        paginationInfo.value.total = 0
+        ElMessage.warning('该提取码下的文件已全部被删除或不存在')
+        return // 直接跳出，不显示绿色的成功提示
+      }
+
       nearbyFiles.value = result.files
 
       // 更新分页信息
@@ -755,10 +765,34 @@ const handleSearch = async (mode = 'keep') => {
       ElMessage.warning('搜索完成，但没有找到文件')
     }
   } catch (error: any) {
-    console.error('搜索附近文件失败:', error)
-    ElMessage.error(error.message || '搜索附近文件失败，请检查网络连接')
-    nearbyFiles.value = [] // 失败时清空文件列表
+    //console.error('搜索附近文件失败:', error)
+    //ElMessage.error(error.message || '搜索附近文件失败，请检查网络连接')
+    //nearbyFiles.value = [] // 失败时清空文件列表
+    //paginationInfo.value.total = 0
+    // 这里会精准捕获后端通过 IllegalArgumentException 传回的字符串
+    /*const errorMsg = error.response?.data?.message || error.message || '搜索附近文件失败'
+    console.error('搜索失败:', errorMsg)
+    
+    // UI 反馈
+    ElMessage.error(errorMsg)
+
+    // 逻辑清理：如果错误信息包含“过期”或“不存在”，可以考虑清除当前激活的提取码
+    if (errorMsg.includes('过期') || errorMsg.includes('不存在')) {
+      activeExtractCode.value = '' // 根据业务需求决定是否自动清空
+    }
+
+    nearbyFiles.value = [] 
+    paginationInfo.value.total = 0*/
+    // 捕获后端 throw 的 IllegalArgumentException 的 message
+    const errorMsg = error.response?.data?.message || error.message || '搜索附近文件失败'
+    ElMessage.error(errorMsg) 
+    
+    nearbyFiles.value = [] 
     paginationInfo.value.total = 0
+
+    if (errorMsg.includes('过期') || errorMsg.includes('不存在')) {
+      activeExtractCode.value = '' 
+    }
   } finally {
     // 确保无论成功或失败都会关闭加载状态
     if (filesLoading.value === true) {
@@ -1131,33 +1165,7 @@ const formatDistance = (meters: number): string => {
   return (meters / 1000).toFixed(2) + 'km'
 }
 
-// 计算下载进度
-/*const calculateDownloadProgress = (): number => {
-  if (
-    !selectedFile.value ||
-    !selectedFile.value.maxDownloads ||
-    selectedFile.value.maxDownloads === 0
-  ) {
-    return 0
-  }
-  const current = selectedFile.value.downloadCount || 0
-  const max = selectedFile.value.maxDownloads
-  return Math.round((current / max) * 100)
-}*/
 
-// 获取下载进度状态
-/*const getDownloadProgressStatus = (): string | undefined => {
-  if (
-    !selectedFile.value ||
-    !selectedFile.value.maxDownloads ||
-    selectedFile.value.maxDownloads === 0
-  ) {
-    return undefined
-  }
-  const current = selectedFile.value.downloadCount || 0
-  const max = selectedFile.value.maxDownloads
-  return current >= max ? 'exception' : undefined
-}*/
 // 1. 判断是否过期 (增加严格的 null/undefined 检查和格式兼容)
 const isExpired = () => {
   // 必须确保 selectedFile 及其 expireTime 存在且不是空字符串
@@ -1410,32 +1418,7 @@ const handleExtractByCode = async () => {
 
   extractLoading.value = true
   try {
-    /*const response = await fetch(`/api/file/extract/${extractCode.value}`, {
-      method: 'GET',
-    })
-
-    const result = await response.json()
-
-    if (result.code === 200) {
-      if (result.data && result.data.length > 0) {
-        isExtractListView.value = true
-        activeExtractCode.value = extractCode.value.trim()
-        extractedFilesFull.value = result.data
-        paginationInfo.value.pageNum = 1
-        applyExtractPage()
-
-        ElMessage.success(`成功提取 ${result.data.length} 个文件`)
-      } else {
-        isExtractListView.value = false
-        activeExtractCode.value = ''
-        extractedFilesFull.value = []
-        nearbyFiles.value = []
-        paginationInfo.value.total = 0
-        ElMessage.info('该取件码下没有有效文件')
-      }
-    } else {
-      ElMessage.error(result.message || '提取失败，请检查取件码是否正确')
-    }*/
+    
     // 这意味着后续的所有搜索（包括分页和筛选）都会带上这个码
     activeExtractCode.value = code
 

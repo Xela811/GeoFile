@@ -4,9 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.OrderItem;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.entity.DownloadLimit;
-import com.geofile.entity.File;
-import com.geofile.entity.FileVO;
+import com.geofile.entity.*;
+import com.geofile.service.FileBatchService;
+import com.geofile.service.FileHashService;
 import com.geofile.service.FileService;
 import com.geofile.service.DownloadLimitService;
 import com.geofile.mapper.FileMapper;
@@ -18,10 +18,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.text.SimpleDateFormat;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Date;
+import java.util.concurrent.TimeUnit;
 
 /**
 * @author xela
@@ -39,89 +42,17 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
     @Autowired
     private RedisUtil redisUtil; // 1. 注入实例
 
+    @Autowired
+    private FileBatchService fileBatchService;
+
+    @Autowired
+    private FileHashService fileHashService;
+
     @Override
     public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
                                          Integer pageNum, Integer pageSize,
                                          String sortBy, String sortOrder, String keyword, String fileType, String extractCode) {
         try {
-//            log.info("搜索附近文件: lat={}, lng={}, radius={}, pageNum={}, pageSize={}, sortBy={}, sortOrder={}, keyword={}, fileType={}",
-//                    lat, lng, radius, pageNum, pageSize, sortBy, sortOrder, keyword, fileType);
-//
-//            // 计算经纬度范围
-//            // 1度纬度 ≈ 111km (111000米)
-//            // 1度经度 ≈ 111km * cos(lat) (米)
-//            double latDelta = radius / 111000.0;
-//            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-//
-//            double minLat = lat - latDelta;
-//            double maxLat = lat + latDelta;
-//            double minLng = lng - lngDelta;
-//            double maxLng = lng + lngDelta;
-//
-//            // 创建Page对象（MyBatis-Plus会自动拦截并实现物理分页）
-//            Page<File> page = new Page<>(pageNum, pageSize);
-//
-//            // 添加排序
-//            if (sortBy != null && !sortBy.isEmpty()) {
-//                boolean isAsc = "ASC".equalsIgnoreCase(sortOrder);
-//                page.addOrder(isAsc ? OrderItem.asc(sortBy) : OrderItem.desc(sortBy));
-//            } else {
-//                // 默认按上传时间降序
-//                page.addOrder(OrderItem.desc("upload_time"));
-//            }
-//
-//            // 构建查询条件
-//            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
-//                .between(File::getLocationLat, minLat, maxLat)
-//                .between(File::getLocationLng, minLng, maxLng)
-//                .in(File::getStatus, Arrays.asList(1, 3))
-//                .isNotNull(File::getLocationLat)
-//                .isNotNull(File::getLocationLng);
-//
-//            // 排除 ID
-//            if (excludeFileId != null) {
-//                queryWrapper.ne(File::getId, excludeFileId);
-//            }
-//
-//            // 搜索关键词（文件名模糊匹配）
-//            if (keyword != null && !keyword.isEmpty()) {
-//                queryWrapper.like(File::getFileName, keyword);
-//            }
-//
-//            if (fileType != null && !fileType.isEmpty()) {
-//                if ("other".equalsIgnoreCase(fileType)) {
-//                    // 如果是“其他”，查询后缀不在已知汇总列表里的所有文件
-//                    // 这样 .exe, .psd, .mat 等都会被包含进来
-//                    queryWrapper.notIn(File::getFileType, KNOWN_EXTENSIONS);
-//                } else {
-//                    List<String> extensions = getFileExtensionsByType(fileType);
-//                    if (!extensions.isEmpty()) {
-//                        queryWrapper.in(File::getFileType, extensions);
-//                    } else {
-//                        // 如果不是预定义类型（比如前端直接传了 "exe"），直接匹配
-//                        queryWrapper.eq(File::getFileType, fileType);
-//                    }
-//                }
-//            }
-//
-//            // 执行分页查询（MyBatis-Plus自动处理LIMIT）
-//            List<File> files = list(page, queryWrapper);
-//
-//            // 计算距离并转换为VO
-//            List<FileVO> result = new ArrayList<>();
-//            for (File file : files) {
-//                // 距离计算公式: distance = sqrt((lat2-lat1)^2 + (lng2-lng1)^2 * cos(lat1)^2)
-//                double distance = calculateDistance(lat, lng, file.getLocationLat(), file.getLocationLng());
-//                if (distance <= radius) {
-//                    FileVO vo = convertToFileVO(file);
-//                    vo.setDistance(distance);
-//                    result.add(vo);
-//                }
-//            }
-//
-//            log.info("附近文件搜索成功，找到 {} 个文件（共 {} 个）", result.size(), page.getTotal());
-//            return result;
-
             Page<File> page = new Page<>(pageNum, pageSize);
             // 排序逻辑保持你原来的部分...
             if (sortBy != null && !sortBy.isEmpty()) {
@@ -136,14 +67,15 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             // --- 核心逻辑：区分有码和无码模式 ---
             if (StringUtils.hasText(extractCode)) {
                 // 【有码模式】：忽视距离限制
-                String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
+                //String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
+                String batchToken = getBatchTokenByCode(extractCode);
                 if (StringUtils.hasText(batchToken)) {
                     // 只查这个取件码对应的文件包
                     queryWrapper.eq(File::getUploadToken, batchToken);
                     log.info("提取码模式：忽视距离限制，匹配Token: {}", batchToken);
                 } else {
-                    // 提取码无效，直接返回空
-                    return new ArrayList<>();
+                    // 提取码无效
+                    throw new IllegalArgumentException("取件码已过期或不存在");
                 }
             } else {
                 // 【无码模式】：执行1km周边过滤
@@ -199,48 +131,13 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
     @Override
     public Long countNearbyFiles(Double lat, Double lng, Integer radius, String keyword, String fileType, String extractCode) {
         try {
-//            // 计算经纬度范围
-//            double latDelta = radius / 111000.0;
-//            double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-//
-//            double minLat = lat - latDelta;
-//            double maxLat = lat + latDelta;
-//            double minLng = lng - lngDelta;
-//            double maxLng = lng + lngDelta;
-//
-//            // 构建查询条件
-//            LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<File>()
-//                .between(File::getLocationLat, minLat, maxLat)
-//                .between(File::getLocationLng, minLng, maxLng)
-//                .in(File::getStatus, Arrays.asList(1, 3)).eq(File::getIsPrivate, 0)
-//                .isNotNull(File::getLocationLat)
-//                .isNotNull(File::getLocationLng);
-//
-//            // 搜索关键词
-//            if (keyword != null && !keyword.isEmpty()) {
-//                queryWrapper.like(File::getFileName, keyword);
-//            }
-//
-//            // 按文件类型过滤（支持类型分类映射）
-//            if (fileType != null && !fileType.isEmpty()) {
-//                List<String> extensions = getFileExtensionsByType(fileType);
-//                if (!extensions.isEmpty()) {
-//                    queryWrapper.in(File::getFileType, extensions);
-//                } else {
-//                    // 如果不是预定义类型，直接匹配
-//                    queryWrapper.eq(File::getFileType, fileType);
-//                }
-//            }
-//
-//            // 统计数量
-//            return count(queryWrapper);
-//
             LambdaQueryWrapper<File> queryWrapper = new LambdaQueryWrapper<>();
 
             if (StringUtils.hasText(extractCode)) {
                 // 有码模式
-                String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
-                if (!StringUtils.hasText(batchToken)) return 0L;
+                //String batchToken = (String) redisUtil.get("code:to:token:" + extractCode);
+                String batchToken = getBatchTokenByCode(extractCode);
+                if (!StringUtils.hasText(batchToken)) {throw new IllegalArgumentException("取件码已过期或不存在");};
                 queryWrapper.eq(File::getUploadToken, batchToken);
             } else {
                 // 无码模式
@@ -267,6 +164,36 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             log.error("统计附近文件数量失败", e);
             return 0L;
         }
+    }
+
+    /**
+     * 根据取件码获取 BatchToken，具备数据库回源能力
+     */
+    private String getBatchTokenByCode(String extractCode) {
+        if (!StringUtils.hasText(extractCode)) return null;
+
+        String redisKey = "code:to:token:" + extractCode;
+        String batchToken = (String) redisUtil.get(redisKey);
+
+        // 如果 Redis 查不到，尝试从 t_file_batch 回源
+        if (!StringUtils.hasText(batchToken)) {
+            FileBatch batch = fileBatchService.getOne(new LambdaQueryWrapper<FileBatch>()
+                    .eq(FileBatch::getExtractCode, extractCode)
+                    .gt(FileBatch::getExpireTime, LocalDateTime.now())); // 必须未过期
+
+            if (batch != null) {
+                batchToken = batch.getBatchToken();
+                // 计算剩余有效期并回填 Redis
+                long remainSeconds = Duration.between(LocalDateTime.now(), batch.getExpireTime()).getSeconds();
+                if (remainSeconds > 0) {
+                    redisUtil.set("code:to:token:" + extractCode, batchToken, remainSeconds, TimeUnit.SECONDS);
+                    redisUtil.set(redisKey, batchToken, remainSeconds, TimeUnit.SECONDS);
+                    redisUtil.set("file:download:" + batchToken, extractCode, remainSeconds, TimeUnit.SECONDS);
+                }
+                log.info("提取码 {} Redis 失效，已从数据库回源成功", extractCode);
+            }
+        }
+        return batchToken;
     }
 
     @Override
@@ -396,6 +323,16 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
         // 1. 查询并校验 (直接复用你提供的逻辑)
         File file = this.getById(fileId);
         if (file == null) throw new IllegalArgumentException("文件不存在");
+
+        // 校验物理关联 (新增对 MD5/SHA256 的兼容检查)
+        if (file.getFileHash() != null) {
+            // 这里的 fileHashService 应该能根据 SHA256 查到物理记录
+            FileHash hashRecord = fileHashService.findByHash(file.getFileHash());
+            if (hashRecord == null || hashRecord.getStatus() == 0) {
+                log.error("物理资源已失效: hash={}", file.getFileHash());
+                throw new IllegalArgumentException("该文件已被系统物理清理");
+            }
+        }
 
         // 2. 验证下载令牌
         if (file.getDownloadToken() == null || !file.getDownloadToken().equals(downloadToken)) {

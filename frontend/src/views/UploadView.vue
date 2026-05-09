@@ -363,7 +363,7 @@ const handleUploadSuccess = (files: UploadUserFile[]) => {
 }
 
 // 上传成功回调（包含 uploadToken）；与 FileUpload 对齐：可为 Result{ data }、FileVO[] 或单个 FileVO
-const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; message?: string }) => {
+const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; message?: string }, total: number) => {
   console.log('收到上传文件数据:', payload)
 
   const raw = payload && payload.data !== undefined ? payload.data : payload
@@ -403,7 +403,7 @@ const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; messa
   if (downloadLimitConfig.value.needCode && items.length > 0) {
     const first = items[0]
     if (first?.downloadCode && first?.uploadToken) {
-      upsertPickupBatchFromUpload(first.downloadCode, first.uploadToken, items)
+      upsertPickupBatchFromUpload(first.downloadCode, first.uploadToken, items, total)
     }
   }
 }
@@ -460,44 +460,77 @@ function mapVoToRow(
   }
 }
 
-function upsertPickupBatchFromUpload(
-  code: string,
-  uploadToken: string,
-  items: {
-    id?: number
-    fileName?: string
-    fileSize?: number
-    uploadTime?: string
-    fileType?: string
-  }[],
-) {
-  const validMinutes = downloadLimitConfig.value.validMinutes
-  const createdAt = Date.now()
-  const existing = pickupBatches.value.find((b) => b.code === code)
+// 在 UploadView.vue 中定义一个闭包变量
+let uploadNoticeTimer = null;
+let pendingFilesCount = 0;
+let processedTaskCount = 0; // 记录已处理的文件坑位
+
+function upsertPickupBatchFromUpload(code, uploadToken, items, totalInBatch) {
+  const dataItems = Array.isArray(items) ? items : [items];
+  processedTaskCount += dataItems.length;
+  const validMinutes = downloadLimitConfig.value.validMinutes;
+  let addedCount = 0;
+  // 1. 核心逻辑：找到或创建 Batch
+  let existing = pickupBatches.value.find((b) => b.code === code);
+  
+  // 1. 统一转换数据格式 (提到最前面，确保全局可用)
+  const newMappedFiles = dataItems.map(x => mapVoToRow(x));
+
   if (existing) {
-    existing.uploadToken = uploadToken
-    existing.validMinutes = validMinutes
-    existing.files = items.filter((x) => x.id != null).map((x) => mapVoToRow(x))
-    existing.lastSyncedAt = Date.now()
-    existing.syncError = null
-    savePickupBatchesToStorage()
-    ElMessage.success(`取件码 ${code} 已更新，可在下方查看与管理`)
-    return
+    // 累加模式：将新来的 items 合并到现有 files 中，去重
+    //const newMappedFiles = items.map(x => mapVoToRow(x));
+    newMappedFiles.forEach(nf => {
+        if (!existing.files.find(f => f.id === nf.id)) {
+            existing.files.push(nf);
+            addedCount++;
+        }
+    });
+    existing.lastSyncedAt = Date.now();
+  } else {
+    // 新建模式
+    existing = {
+      code,
+      uploadToken,
+      validMinutes,
+      createdAt: Date.now(),
+      files: newMappedFiles,
+      lastSyncedAt: Date.now(),
+      syncError: null,
+      refreshing: false,
+    };
+    addedCount = newMappedFiles.length; // 新建批次，全量计入
+    pickupBatches.value.unshift(existing);
   }
-  const batch: PickupBatchDisplay = {
-    code,
-    uploadToken,
-    validMinutes,
-    createdAt,
-    files: items.filter((x) => x.id != null).map((x) => mapVoToRow(x)),
-    lastSyncedAt: Date.now(),
-    syncError: null,
-    refreshing: false,
+
+  // 2. 统计本次任务累积的新增文件数
+  //pendingFilesCount += items.length;
+// 2. 只有真正新增了文件，才累加进防抖统计量
+if (addedCount > 0) {
+    pendingFilesCount += addedCount;
+    // 3. 【防抖核心】修复气泡多次弹出
+  if (uploadNoticeTimer) clearTimeout(uploadNoticeTimer);
+  
+  uploadNoticeTimer = setTimeout(() => {
+    // 只有在 500ms 内没有新的 upsert 请求时，才弹窗一次
+    if (processedTaskCount >= totalInBatch) {
+    ElMessage.success({
+      message: `取件码 ${code}：本次成功上传 ${pendingFilesCount} 个文件，已保存在下方`,
+      duration: 5000,
+      showClose: true
+    });
+   // 重置统计量
+   pendingFilesCount = 0;
+    uploadNoticeTimer = null; 
+    processedTaskCount = 0;
   }
-  pickupBatches.value.unshift(batch)
-  savePickupBatchesToStorage()
-  ElMessage.success(`取件码 ${code} 已生成，已保存在本页下方`)
+    
+  }, 500); // 500ms 的缓冲时间足够跳出循环
+  }
+  
+
+  savePickupBatchesToStorage();
 }
+
 
 /** 从 localStorage `myUploadedFiles` 中移除指定文件 id 对应的上传令牌 */
 function removeUploadTokensForFileIds(fileIds: number[]) {
@@ -541,8 +574,12 @@ async function refreshPickupBatch(batch: PickupBatchDisplay) {
       }
     } else {
       batch.syncError = json.message || '取件码无效或已过期'
-      removePickupBatch(batch.code, batch)
-      if (json.message) ElMessage.warning(json.message)
+      //removePickupBatch(batch.code, batch)
+      //if (json.message) ElMessage.warning(json.message)
+      if (json.message && (json.message.includes('过期') || json.message.includes('不存在'))) {
+        // 慎重删除，或者让用户手动点删除
+      removePickupBatch(batch.code, batch) 
+      }
     }
   } catch {
     batch.syncError = '网络错误，请稍后重试'
@@ -704,20 +741,7 @@ const handleUploadError = (error: Error) => {
   console.error('上传失败:', error)
 }
 
-// 立即上传
-//const triggerUpload = () => {
-//  if (uploadRef.value) {
-//    uploadRef.value.startUpload()
-//  }
-//}
 
-// 清空列表
-//const handleClear = () => {
-//if (uploadRef.value) {
-//uploadRef.value.clear()
-//ElMessage.info('已清空文件列表')
-//}
-//}
 </script>
 
 <style scoped lang="scss">

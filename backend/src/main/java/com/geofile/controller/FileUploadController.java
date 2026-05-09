@@ -1,7 +1,12 @@
 package com.geofile.controller;
 
+import com.geofile.dto.QuickCheckDTO;
+import com.geofile.dto.SecUploadDTO;
 import com.geofile.entity.*;
 import com.geofile.exception.DownloadException;
+import com.geofile.service.FileHashService;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpStatus;
@@ -20,6 +25,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -55,6 +61,11 @@ public class FileUploadController {
     @Autowired
     private FileService fileService;
 
+    @Autowired
+    private FileHashService fileHashService;
+
+    @Value("${file.upload.path}")
+    private String uploadPath;
     /**
      * 上传单个文件
      */
@@ -105,7 +116,7 @@ public class FileUploadController {
             log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     file.getOriginalFilename(), lat, lng, radius, maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes, needCode, null);
+            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes, needCode, null, null);
 
             return Result.success(result);
 
@@ -152,12 +163,15 @@ public class FileUploadController {
             @RequestParam(required = false) Integer radius,
             @RequestParam(required = false, defaultValue = "1") Integer maxDownloads,
             @RequestParam(required = false, defaultValue = "0") Integer validMinutes,
-            @RequestParam(required = false, defaultValue = "true") Boolean needCode) {
+            @RequestParam(required = false, defaultValue = "true") Boolean needCode,
+            @RequestParam(required = false) String providedToken,
+            @RequestParam(required = false) List<String> sampleHashes,
+            HttpServletRequest request) {
         try {
             log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     files.length, lat, lng, radius, maxDownloads, validMinutes);
 
-            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode);
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode, providedToken, sampleHashes, request);
 
             return Result.success(results);
 
@@ -165,6 +179,40 @@ public class FileUploadController {
             log.error("批量文件上传失败", e);
             return Result.error("批量文件上传失败: " + e.getMessage());
         }
+    }
+
+    @PostMapping("/sec-upload")
+    @Operation(summary = "文件秒传", description = "根据指纹校验实现秒传，支持加入现有批次")
+    public Result<FileVO> secUpload(@RequestBody SecUploadDTO dto, HttpServletRequest request) {
+        try {
+            log.info("接收到秒传请求: fileName={}, hash={}", dto.getFileName(), dto.getHash());
+            FileVO result = fileUploadService.secUpload(dto, request);
+
+            if (result != null) {
+                return Result.success(result);
+            } else {
+                // 404 状态码告诉前端：指纹不存在，请走普通上传逻辑
+                return Result.error(404, "未命中秒传，请执行完整上传");
+            }
+        } catch (Exception e) {
+            log.error("秒传处理失败", e);
+            return Result.error("秒传失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/quick-check")
+    public Result<Map<String, Object>> quickCheck(@RequestBody QuickCheckDTO dto) {
+        // 核心逻辑：查询是否存在大小和采样哈希同时匹配的记录
+        boolean exists = fileHashService.count(new LambdaQueryWrapper<FileHash>()
+                .eq(FileHash::getFileSize, dto.getSize())
+                .eq(FileHash::getSampleHash, dto.getSampleHash())
+                .last("LIMIT 1") // 只要找到一个就立刻停止，提升性能
+        ) > 0;
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("canPotentiallySecUpload", exists);
+
+        return Result.success(response);
     }
 
     /**
@@ -252,27 +300,34 @@ public class FileUploadController {
             com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token);
 
             // 2. 构建文件路径
-            File filePath = new File(file.getFilePath());
-            if (!filePath.exists()) {
-                log.warn("文件不存在: {}", file.getFilePath());
+            java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath)
+                    .resolve(file.getFilePath())
+                    .normalize();
+
+            if (!java.nio.file.Files.exists(fullPath)) {
+                log.error("物理文件丢失，数据库记录路径: {}, 拼接后的绝对路径: {}", file.getFilePath(), fullPath);
                 return ResponseEntity.notFound().build();
             }
 
             // 3. 读取文件内容
-            /*FileInputStream fis = new FileInputStream(filePath);
-            byte[] fileContent = new byte[(int) filePath.length()];
-            fis.read(fileContent);
-            fis.close();*/
-            FileSystemResource resource = new FileSystemResource(filePath);
+            FileSystemResource resource = new FileSystemResource(fullPath.toFile());
 
             // 4. 设置响应头
             String encodedFileName = URLEncoder.encode(file.getOriginalName(), StandardCharsets.UTF_8)
                     .replaceAll("\\+", "%20");
 
             HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            // 根据文件后缀动态探测 Content-Type
+            String contentType = java.nio.file.Files.probeContentType(fullPath);
+            headers.setContentType(contentType != null ? MediaType.parseMediaType(contentType) : MediaType.APPLICATION_OCTET_STREAM);
+            //headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.setContentLength(file.getFileSize());
             headers.setContentDispositionFormData("attachment", encodedFileName);
+
+            // 增加 SHA-256 响应头，方便前端校验文件完整性
+            if (file.getFileHash() != null) {
+                headers.add("X-File-Hash-Sha256", file.getFileHash());
+            }
 
             log.info("文件下载成功: {}, 大小: {} bytes", file.getFileName(), file.getFileSize());
 
@@ -282,13 +337,9 @@ public class FileUploadController {
                     .body(resource);
 
         } catch (DownloadException e) {
-            /*log.error("下载失败: fileId={}, error={}", fileId, e.getMessage());
-            return ResponseEntity.badRequest().build();*/
             log.warn("拦截下载请求: {}", e.getMessage());
             return redirectToErrorPage(e.getMessage());
         } catch (Exception e) {
-            /*log.error("下载文件失败: fileId={}", fileId, e);
-            return ResponseEntity.internalServerError().build();*/
             log.error("下载接口崩溃", e);
             return redirectToErrorPage("服务器繁忙，请稍后再试");
         }
@@ -380,28 +431,12 @@ public class FileUploadController {
             // 1. 业务逻辑校验（包含计数+1）
             com.geofile.entity.File fileEntity = fileService.processAccess(fileId, token);
 
-            java.io.File diskFile = new java.io.File(fileEntity.getFilePath());
+            java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath, fileEntity.getFilePath()).normalize();
+            java.io.File diskFile = fullPath.toFile();
             if (!diskFile.exists()) {
                 return ResponseEntity.notFound().build();
             }
             Resource resource = new UrlResource(diskFile.toURI());
-
-//            // 2. 增强型 Content-Type 识别
-//            String contentType = Files.probeContentType(diskFile.toPath());
-//            String fileName = fileEntity.getFileName().toLowerCase();
-//
-//            // 兜底逻辑：如果是代码或文本，强制设为 text/plain 以便 iframe 渲染
-//            if (contentType == null || contentType.equals("application/octet-stream")) {
-//                if (fileName.endsWith(".txt") || fileName.endsWith(".java") ||
-//                        fileName.endsWith(".vue") || fileName.endsWith(".py") ||
-//                        fileName.endsWith(".md") || fileName.endsWith(".sql")) {
-//                    contentType = "text/plain; charset=utf-8"; // 指定 utf-8 防止中文乱码
-//                } else if (fileName.endsWith(".pdf")) {
-//                    contentType = "application/pdf";
-//                } else {
-//                    contentType = "application/octet-stream";
-//                }
-//            }
 
             String originalFileName = fileEntity.getFileName();
             String extension = "";
@@ -413,7 +448,8 @@ public class FileUploadController {
             }
 
             // 核心 MIME 识别逻辑
-            String contentType = Files.probeContentType(diskFile.toPath());
+            //String contentType = Files.probeContentType(diskFile.toPath());
+            String contentType = java.nio.file.Files.probeContentType(fullPath);
 
             // 满足你的要求：针对列表中的所有文本格式进行兜底
             if (TEXT_EXTENSIONS.contains(extension)) {
@@ -467,8 +503,12 @@ public class FileUploadController {
                 if (file.getStatus() == 3) throw new IllegalArgumentException("文件下载次数已达上限");
             }
 
-            java.io.File diskFile = new java.io.File(file.getFilePath());
 
+            java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath, file.getFilePath()).normalize();
+            java.io.File diskFile = fullPath.toFile();
+            if (!diskFile.exists()) {
+                return ResponseEntity.notFound().build();
+            }
             // 4. 初始化虚拟根节点
             ArchiveNode root = new ArchiveNode("root", true, 0);
 
