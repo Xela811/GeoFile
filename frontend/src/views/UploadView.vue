@@ -1,13 +1,13 @@
 <template>
   <div class="upload-page">
     <div class="top-bar">
-      <el-button type="primary" link :icon="Back" @click="goHome"> 返回首页 </el-button>
+      <el-button type="primary" link :icon="Back" @click="goHome" :disabled="isCompLoading"> 返回首页 </el-button>
     </div>
 
     <!-- 标题区域 -->
     <div class="page-header">
       <h1>文件上传</h1>
-      <p class="subtitle">支持拖拽上传，大文件自动切换分片上传模式</p>
+      <p class="subtitle">支持拖拽上传，重复文件自动检测秒传</p>
     </div>
 
     <!-- 可复用上传组件 -->
@@ -20,10 +20,11 @@
       "
     >
       <h2 style="margin: 0">文件列表</h2>
-      <el-button type="primary" :icon="Back" @click="showLimitDialog"> 设置下载限制 </el-button>
+      <el-button type="primary" :icon="Back" @click="showLimitDialog" :disabled="isCompLoading"> 设置下载限制 </el-button>
     </div>
 
     <FileUpload
+    v-model:loading="isCompLoading"
       ref="uploadRef"
       title="上传文件"
       :multiple="true"
@@ -122,6 +123,7 @@
         </el-alert>
         <el-table
           v-if="batch.files.length > 0"
+          :key="`${batch.code}-${batch.files.length}`"
           :data="batch.files"
           size="small"
           stripe
@@ -150,6 +152,92 @@
         <el-empty v-else description="暂无文件或正在加载" :image-size="64" />
       </div>
     </el-card>
+
+    <el-card v-if="publicBatches.length > 0" class="pickup-batches-card public-batches-card" shadow="never">
+  <template #header>
+    <div class="pickup-batches-header">
+      <span style="color: #67c23a; font-weight: bold;">
+        <el-icon style="vertical-align: middle; margin-right: 4px;"><Share /></el-icon>
+        我的公开分享（地图可见）
+      </span>
+    </div>
+  </template>
+  <p class="pickup-batches-hint">
+    仅记录您在本浏览器上传的「公开」文件。这些文件在地图上对所有人可见（需在您位置 1km 内）。
+    删除整批将使该批次文件从地图上彻底移除。
+  </p>
+
+  <div v-for="batch in publicBatches" :key="batch.uploadToken" class="pickup-batch-block">
+    <div class="pickup-batch-toolbar">
+      <div class="pickup-code-row">
+        <span class="label">管理令牌</span>
+        <el-tag type="success" size="large" effect="plain">
+          {{ batch.uploadToken.substring(0, 12) }}...
+        </el-tag>
+        <el-text type="info" size="small">（公开模式无取件码）</el-text>
+        <el-button
+        type="primary"
+        link
+        :icon="Share"
+        @click="openPublicShare(batch.uploadToken)"
+        style="margin-left: 12px"
+      >
+        分享
+      </el-button>
+      </div>
+
+      <div class="pickup-meta">
+        <span class="meta-item">
+          上传于：{{ formatSyncedAt(batch.createdAt) }}
+        </span>
+        <span v-if="batch.lastSyncedAt" class="meta-item subtle">
+          最近操作：{{ formatSyncedAt(batch.lastSyncedAt) }}
+        </span>
+      </div>
+
+      <div class="pickup-actions">
+        <el-button
+              size="small"
+              :icon="Refresh"
+              :loading="batch.refreshing"
+              @click="refreshPublicBatch(batch)"
+            >
+              刷新列表
+        </el-button>
+        <el-button
+          size="small"
+          type="danger"
+          plain
+          :icon="Delete"
+          @click="confirmDeleteEntirePublicBatch(batch)"
+        >
+          删除整批并从地图下架
+        </el-button>
+      </div>
+    </div>
+
+    <el-table :data="batch.files" size="small" stripe class="pickup-file-table">
+      <el-table-column prop="fileName" label="文件名" min-width="160" show-overflow-tooltip />
+      <el-table-column label="大小" width="100">
+        <template #default="{ row }">
+          {{ formatFileSize(row.fileSize) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="100" fixed="right">
+        <template #default="{ row }">
+          <el-button
+            type="danger"
+            link
+            size="small"
+            @click="deleteSingleInPublicBatch(batch, row.id)"
+          >
+            删除
+          </el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+  </div>
+</el-card>
 
     <!-- 下载限制配置对话框 -->
     <el-dialog
@@ -211,12 +299,12 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="shareVisible" title="分享文件批次" width="320px" center append-to-body>
+    <el-dialog v-model="shareVisible" :title="shareTitle" width="320px" center append-to-body>
       <div style="display: flex; flex-direction: column; align-items: center">
         <qrcode-vue :value="fullShareUrl" :size="200" level="H" render-as="svg" />
 
         <p style="margin: 15px 0 5px; font-size: 14px; color: #606266">
-          扫码或发送链接，对方即可直接下载
+          {{shareHint}}
         </p>
 
         <el-input v-model="fullShareUrl" readonly size="small" style="margin-top: 10px">
@@ -226,25 +314,6 @@
         </el-input>
       </div>
     </el-dialog>
-
-    <!-- 快捷操作 -->
-    <!--<div class="quick-actions">
-      <el-card>
-        <template #header>
-          <span>快捷操作</span>
-        </template>
-        <div class="action-buttons">
-          <el-button type="primary" :icon="Upload" @click="triggerUpload">
-            <el-icon><Upload /></el-icon>
-            立即上传
-          </el-button>
-          <el-button @click="handleClear" :icon="Delete">
-            <el-icon><Delete /></el-icon>
-            清空列表
-          </el-button>
-        </div>
-      </el-card>
-    </div>-->
   </div>
 </template>
 
@@ -257,20 +326,42 @@ import FileUpload from '@/components/FileUpload.vue'
 import { reconcileMyUploadedFiles } from '@/services/reconcileService'
 import QrcodeVue from 'qrcode.vue'
 
+const isCompLoading = ref(false); // 接收子组件的上传状态
+
 // --- 分享相关逻辑 ---
 const shareVisible = ref(false)
-const currentShareCode = ref('') // 当前点击分享的取件码
+const currentShareId = ref('') // 当前点击分享的取件码
 
+const shareType = ref<'private' | 'public'>('private') // 标识分享类型
 // 生成动态链接
 const fullShareUrl = computed(() => {
   // 生成格式如：http://yourdomain.com/#/s/TOKQE
   // 注意：这里使用了你之前提到的 /s/ 路由格式
-  return `${window.location.origin}/#/s/${currentShareCode.value}`
+  //return `${window.location.origin}/#/s/${currentShareCode.value}`
+  if (!currentShareId.value) return ''
+  const base = window.location.origin
+  // 私有使用 /s/，公开使用 /b/
+  const path = shareType.value === 'private' ? '/s/' : '/b/'
+  return `${base}${path}${currentShareId.value}`
 })
 
+const shareTitle = computed(() => shareType.value === 'private' ? '分享私有文件' : '分享公开批次')
+const shareHint = computed(() => 
+  shareType.value === 'private' 
+    ? '扫码或发送链接，输入取件码即可下载' 
+    : '扫码或发送链接，对方在1km内即可查看并下载'
+)
+
 // 打开分享弹窗
-const openShare = (code) => {
-  currentShareCode.value = code
+const openShare = (code: string) => {
+  shareType.value = 'private'
+  currentShareId.value = code
+  shareVisible.value = true
+}
+
+const openPublicShare = (token: string) => {
+  shareType.value = 'public'
+  currentShareId.value = token
   shareVisible.value = true
 }
 
@@ -312,6 +403,10 @@ const uploadRef = ref<InstanceType<typeof FileUpload>>()
 const pickupBatches = ref<PickupBatchDisplay[]>([])
 let pickupPollTimer: ReturnType<typeof setInterval> | null = null
 let reconcileTimer: ReturnType<typeof setInterval> | null = null
+
+// 新增公开批次相关的常量与变量 ---
+const PUBLIC_BATCHES_STORAGE_KEY = 'geofile_public_upload_batches'
+const publicBatches = ref<PickupBatchDisplay[]>([]) // 复用私有批次的接口定义
 
 // 下载限制配置
 const showDownloadLimitDialog = ref(false)
@@ -400,20 +495,44 @@ const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; messa
     console.warn('上传文件数据不完整:', payload)
   }
 
-  if (downloadLimitConfig.value.needCode && items.length > 0) {
+  /*if (downloadLimitConfig.value.needCode && items.length > 0) {
     const first = items[0]
     if (first?.downloadCode && first?.uploadToken) {
       upsertPickupBatchFromUpload(first.downloadCode, first.uploadToken, items, total)
+    } else {
+      // 新增：公开模式入库
+      upsertPublicBatchFromUpload(first.uploadToken, items, total)
+    }
+  }*/
+  // --- 修改后的逻辑分流 ---
+if (items.length > 0) {
+  const first = items[0]
+
+  if (downloadLimitConfig.value.needCode) {
+    // 1. 私有模式逻辑：必须有 downloadCode 和 uploadToken
+    if (first?.downloadCode && first?.uploadToken) {
+      upsertPickupBatchFromUpload(first.downloadCode, first.uploadToken, items, total)
+    } else {
+      console.warn('私有上传缺少取件码或令牌', first)
+    }
+  } else {
+    // 2. 公开模式逻辑：只要有 uploadToken 即可入库
+    if (first?.uploadToken) {
+      upsertPublicBatchFromUpload(first.uploadToken, items, total)
+    } else {
+      console.warn('公开上传缺少令牌', first)
     }
   }
 }
+}
 
 function storedBatchesOnly(list: PickupBatchDisplay[]): PickupBatchStored[] {
-  return list.map(({ code, uploadToken, validMinutes, createdAt }) => ({
+  return list.map(({ code, uploadToken, validMinutes, createdAt, files }) => ({
     code,
     uploadToken,
     validMinutes,
     createdAt,
+    files: files.map(f => ({ id: f.id, fileName: f.fileName, fileSize: f.fileSize, uploadTime: f.uploadTime }))
   }))
 }
 
@@ -428,6 +547,18 @@ function savePickupBatchesToStorage() {
   }
 }
 
+// 新增公开批次的持久化逻辑 ---
+function savePublicBatchesToStorage() {
+  try {
+    localStorage.setItem(
+      PUBLIC_BATCHES_STORAGE_KEY,
+      JSON.stringify(storedBatchesOnly(publicBatches.value)),
+    )
+  } catch (e) {
+    console.error('保存公开批次失败:', e)
+  }
+}
+
 function loadPickupBatchesFromStorage(): PickupBatchDisplay[] {
   try {
     const s = localStorage.getItem(PICKUP_BATCHES_STORAGE_KEY)
@@ -436,13 +567,32 @@ function loadPickupBatchesFromStorage(): PickupBatchDisplay[] {
     if (!Array.isArray(parsed)) return []
     return parsed.map((b) => ({
       ...b,
-      files: [],
+      files: b.files || [],
       lastSyncedAt: null,
       syncError: null,
       refreshing: false,
     }))
   } catch (e) {
     console.error('读取取件批次失败:', e)
+    return []
+  }
+}
+
+function loadPublicBatchesFromStorage(): PickupBatchDisplay[] {
+  try {
+    const s = localStorage.getItem(PUBLIC_BATCHES_STORAGE_KEY)
+    if (!s) return []
+    const parsed = JSON.parse(s) as PickupBatchStored[]
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((b) => ({
+      ...b,
+      files: b.files || [],
+      lastSyncedAt: null,
+      syncError: null,
+      refreshing: false,
+    }))
+  } catch (e) {
+    console.error('读取公开批次失败:', e)
     return []
   }
 }
@@ -531,6 +681,38 @@ if (addedCount > 0) {
   savePickupBatchesToStorage();
 }
 
+// 新增公开批次的维护函数 ---
+function upsertPublicBatchFromUpload(uploadToken: string, items: any[], totalInBatch: number) {
+  const dataItems = Array.isArray(items) ? items : [items]
+  const newMappedFiles = dataItems.map(x => mapVoToRow(x))
+  
+  // 公开模式下没有 downloadCode，我们用 Token 前缀作为标识
+  const displayCode = uploadToken.substring(0, 8).toUpperCase()
+  
+  let existing = publicBatches.value.find((b) => b.uploadToken === uploadToken)
+  
+  if (existing) {
+    newMappedFiles.forEach(nf => {
+      if (!existing.files.find(f => f.id === nf.id)) {
+        existing.files.push(nf)
+      }
+    })
+    existing.lastSyncedAt = Date.now()
+  } else {
+    existing = {
+      code: displayCode, // 仅展示用
+      uploadToken,
+      validMinutes: downloadLimitConfig.value.validMinutes,
+      createdAt: Date.now(),
+      files: newMappedFiles,
+      lastSyncedAt: Date.now(),
+      syncError: null,
+      refreshing: false,
+    }
+    publicBatches.value.unshift(existing)
+  }
+  savePublicBatchesToStorage()
+}
 
 /** 从 localStorage `myUploadedFiles` 中移除指定文件 id 对应的上传令牌 */
 function removeUploadTokensForFileIds(fileIds: number[]) {
@@ -580,6 +762,8 @@ async function refreshPickupBatch(batch: PickupBatchDisplay) {
         // 慎重删除，或者让用户手动点删除
       removePickupBatch(batch.code, batch) 
       }
+      // --- 新增：刷新成功后也要存一次盘 ---
+      savePickupBatchesToStorage()
     }
   } catch {
     batch.syncError = '网络错误，请稍后重试'
@@ -588,9 +772,45 @@ async function refreshPickupBatch(batch: PickupBatchDisplay) {
   }
 }
 
+// 新增：刷新单个公开批次（主要靠后端校验 Token 下是否还有文件）
+async function refreshPublicBatch(batch: PickupBatchDisplay) {
+  batch.refreshing = true;
+  try {
+    // 建议后端提供一个 /api/file/list-by-token 接口
+    // 如果没有，可以复用你的搜索接口，但这里我们通过判断文件是否还在
+    const res = await fetch(`/api/file/list-by-token?uploadToken=${encodeURIComponent(batch.uploadToken)}`)
+    const json = await res.json()
+    
+    if (json.code === 200) {
+      if (!json.data || json.data.length === 0) {
+        // 后端说没文件了，前端立即移除该批次
+        publicBatches.value = publicBatches.value.filter(b => b.uploadToken !== batch.uploadToken)
+        savePublicBatchesToStorage()
+      } else {
+        batch.files = json.data.map(x => mapVoToRow(x))
+        savePublicBatchesToStorage()
+      }
+    }
+  } catch (e) {
+    console.error("刷新公开批次失败", e)
+  } finally {
+    batch.refreshing = false;
+  }
+}
+
 async function refreshAllPickupBatches() {
-  for (const b of pickupBatches.value) {
+  /*for (const b of pickupBatches.value) {
     await refreshPickupBatch(b)
+  }*/
+  // 创建一个浅拷贝副本进行遍历，确保每一个批次都能被处理到
+  const batchesToRefresh = [...pickupBatches.value]
+  for (const b of batchesToRefresh) {
+    await refreshPickupBatch(b)
+  }
+  // 2. 刷新公开
+  const publicToRefresh = [...publicBatches.value]
+  for (const b of publicToRefresh) {
+    await refreshPublicBatch(b)
   }
 }
 
@@ -639,9 +859,25 @@ async function deleteSingleInBatch(batch: PickupBatchDisplay, fileId: number) {
     )
     const json = (await res.json()) as { code: number; message?: string }
     if (json.code === 200) {
+      /*removeUploadTokensForFileIds([fileId])
+      ElMessage.success('已删除')
+      await refreshPickupBatch(batch)*/
+// 1. 手动从本地数组中剔除该文件（不要完全依赖刷新，先做前端响应式剔除）
+const index = batch.files.findIndex(f => f.id === fileId);
+      if (index !== -1) {
+        batch.files.splice(index, 1);
+      }
+
       removeUploadTokensForFileIds([fileId])
       ElMessage.success('已删除')
-      await refreshPickupBatch(batch)
+
+      // 2. 如果文件删完了，直接调用删除整批的本地逻辑，避免滞留
+      if (batch.files.length === 0) {
+        removePickupBatch(batch.code, batch);
+      } else {
+        // 3. 如果还有文件，再刷新
+        await refreshPickupBatch(batch);
+      }
     } else {
       ElMessage.error(json.message || '删除失败')
     }
@@ -673,6 +909,7 @@ async function confirmDeleteEntireBatch(batch: PickupBatchDisplay) {
     if (json.code === 200) {
       const n = json.data?.deletedCount
       ElMessage.success(typeof n === 'number' ? `已删除 ${n} 个文件` : '整批已删除')
+      batch.files = [];
       removePickupBatch(batch.code, batch)
     } else {
       ElMessage.error(json.message || '删除失败')
@@ -683,17 +920,84 @@ async function confirmDeleteEntireBatch(batch: PickupBatchDisplay) {
   }
 }
 
+// 公开批次的单文件删除
+async function deleteSingleInPublicBatch(batch: PickupBatchDisplay, fileId: number) {
+  try {
+    await ElMessageBox.confirm('确定删除该公开文件？删除后地图上将不再显示。', '提示', { type: 'warning' })
+    const res = await fetch(`/api/file/delete/${fileId}?uploadToken=${encodeURIComponent(batch.uploadToken)}`, { method: 'DELETE' })
+    const json = await res.json()
+    if (json.code === 200) {
+      batch.files = batch.files.filter(f => f.id !== fileId)
+      if (batch.files.length === 0) {
+        publicBatches.value = publicBatches.value.filter(b => b.uploadToken !== batch.uploadToken)
+      }
+      savePublicBatchesToStorage()
+      ElMessage.success('删除成功')
+    }
+  } catch (e) { /* 取消或失败处理 */ }
+}
+
+// 公开批次的整批删除
+async function confirmDeleteEntirePublicBatch(batch: PickupBatchDisplay) {
+  try {
+    await ElMessageBox.confirm('确定删除该批次所有公开文件？', '警告', { type: 'danger' })
+    const res = await fetch(`/api/file/batch-by-upload-token?uploadToken=${encodeURIComponent(batch.uploadToken)}`, { method: 'DELETE' })
+    const json = await res.json()
+    if (json.code === 200) {
+      publicBatches.value = publicBatches.value.filter(b => b.uploadToken !== batch.uploadToken)
+      savePublicBatchesToStorage()
+      ElMessage.success('整批文件已下架')
+    }
+  } catch (e) { /* 取消或失败处理 */ }
+}
+
+async function reconcilePublicBatches() {
+  if (publicBatches.value.length === 0) return;
+
+  const validBatches: PickupBatchDisplay[] = [];
+  let changed = false;
+
+  for (const batch of publicBatches.value) {
+    try {
+      // 利用你现有的获取详情接口，验证该 Token 是否还存活
+      const res = await fetch(`/api/file/list-by-token?uploadToken=${encodeURIComponent(batch.uploadToken)}`);
+      const json = await res.json();
+
+      // 如果后端返回 200 且有数据，保留；否则标记为需要删除
+      if (json.code === 200 && Array.isArray(json.data) && json.data.length > 0) {
+        // 顺便更新一下最新的文件状态（比如下载次数）
+        batch.files = json.data.map(x => mapVoToRow(x));
+        validBatches.push(batch);
+      } else {
+        changed = true;
+        console.log(`[对账] 公开批次已失效或下架: ${batch.uploadToken}`);
+      }
+    } catch (e) {
+      // 网络错误时保留，防止误删
+      validBatches.push(batch);
+    }
+  }
+
+  if (changed) {
+    publicBatches.value = validBatches;
+    savePublicBatchesToStorage();
+  }
+}
+
 onMounted(() => {
   pickupBatches.value = loadPickupBatchesFromStorage()
+  publicBatches.value = loadPublicBatchesFromStorage()
   void refreshAllPickupBatches()
   pickupPollTimer = setInterval(() => {
     void refreshAllPickupBatches()
   }, 120_000)
 
+  void reconcilePublicBatches()
   // 对账清理 myUploadedFiles（后端定时任务导致的过期/下架不会自动反映到本地缓存）
   void reconcileMyUploadedFiles()
   reconcileTimer = setInterval(() => {
     void reconcileMyUploadedFiles()
+    void reconcilePublicBatches()
   }, 5 * 60_000)
 })
 
@@ -801,6 +1105,12 @@ const handleUploadError = (error: Error) => {
 
 .pickup-batches-card {
   margin-top: 28px;
+}
+
+.public-batches-card {
+  margin-top: 20px;
+  border-left: 4px solid #67c23a; // 绿色左边框表示公开
+  background-color: #f0f9eb; // 浅绿色背景
 }
 
 .pickup-batches-header {

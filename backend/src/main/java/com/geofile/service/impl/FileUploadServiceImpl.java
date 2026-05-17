@@ -12,11 +12,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -85,11 +86,14 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Autowired
     private FileMapper fileMapper;
 
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
+
     @Override
     @Transactional
     public FileVO uploadFile(MultipartFile file, Integer maxDownloads, Integer validMinutes, Boolean needCode) {
         // 调用带位置参数的版本，位置为空
-        return uploadFile(file, null, null, null, maxDownloads, validMinutes, needCode, null, null);
+        return uploadFile(file, null, null, null, maxDownloads, validMinutes, needCode, null, null,null);
     }
 
     /**
@@ -106,7 +110,7 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Transactional
     @Override
     public FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius,
-                             Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, String sampleHash) {
+                             Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, String sampleHash, String fullHash) {
         try {
             // 1. 验证文件
             String originalFilename = file.getOriginalFilename();
@@ -118,8 +122,21 @@ public class FileUploadServiceImpl implements FileUploadService {
             }
 
             // 计算 MD5 和 SHA-256 (使用你编写的 HashUtils)
-            String md5 = HashUtils.getMd5(file.getInputStream());
-            String sha256 = HashUtils.getSha256(file.getInputStream());
+            //String md5;
+            String sha256;
+            // --- 核心改动：如果有前端传来的 Hash，直接使用 ---
+            if (fullHash != null && !fullHash.isEmpty()) {
+                sha256 = fullHash;
+                // 如果前端只传了 SHA256 没传 MD5，后端可以只算一个 MD5，
+                // 或者干脆让前端把 MD5 也传过来。这里假设只传了 SHA256：
+                //md5 = HashUtils.getMd5(file.getInputStream());
+                log.info("使用前端提供的全量 Hash: {}", sha256);
+            } else {
+                // 前端没传（兜底逻辑），后端自己全量算
+                log.warn("前端未提供 Hash，后端执行全量计算: {}", originalFilename);
+                sha256 = HashUtils.getSha256(file.getInputStream());
+                //md5 = HashUtils.getMd5(file.getInputStream());
+            }
 
             // 3. 物理查重与存盘逻辑
             // A. 第一步：直接尝试原子增加引用计数（这不仅是增加计数，也是在尝试“激活”可能存在的 status=0 的记录）
@@ -152,7 +169,7 @@ public class FileUploadServiceImpl implements FileUploadService {
                 // 封装新对象执行 INSERT
                 FileHash newHash = new FileHash();
                 newHash.setFileHash(sha256);
-                newHash.setMd5(md5);
+                //newHash.setMd5(md5);
                 newHash.setSampleHash(sampleHash);
                 newHash.setFileSize(size);
                 newHash.setStoragePath(finalRelativePath);
@@ -194,7 +211,7 @@ public class FileUploadServiceImpl implements FileUploadService {
     public List<FileVO> uploadFiles(List<MultipartFile> files) {
         return files.stream()
                 .filter(file -> !file.isEmpty())
-                .map(file -> this.uploadFile(file, null, null, null, 1, 30, true, null, null))
+                .map(file -> this.uploadFile(file, null, null, null, 1, 30, true, null, null,null))
                 .collect(Collectors.toList());
     }
 
@@ -277,6 +294,19 @@ public class FileUploadServiceImpl implements FileUploadService {
             fileEntity.setLocationLng(lng);
             fileEntity.setLocationRadius(radius != null ? radius : 1000);
             log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}", originalFilename, lat, lng, radius);
+            // ======= 新增 RedisGEO 写入逻辑 =======
+            // ======= 核心优化：只有公开文件才入库 RedisGEO =======
+            if (Boolean.FALSE.equals(needCode)) { // needCode 为 false 代表公开
+                try {
+                    String geoKey = "file:locations:public"; // 明确标识为公开
+                    redisTemplate.opsForGeo().add(geoKey, new Point(lng, lat), uploadToken);
+                    log.info("公开文件位置已同步至 Redis: token={}", uploadToken);
+                } catch (Exception e) {
+                    log.error("RedisGEO 写入失败", e);
+                }
+            } else {
+                log.info("私有文件，跳过 RedisGEO 记录，仅保存数据库坐标");
+            }
         } else {
             log.info("文件上传（无位置信息）: {}", originalFilename);
         }
@@ -288,7 +318,7 @@ public class FileUploadServiceImpl implements FileUploadService {
         // 8. 统一使用验证码服务生成并保存
         String downloadCode = null;
 
-        if (Boolean.TRUE.equals(needCode)) {
+        if (Boolean.TRUE.equals(needCode) && providedToken == null) {
             // 调用验证码服务生成
             downloadCode = verificationCodeService.generateDownloadCode();
 
@@ -323,7 +353,7 @@ public class FileUploadServiceImpl implements FileUploadService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, List<String> sampleHashes, HttpServletRequest request) {
+    public List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, List<String> sampleHashes, List<String> fullHashes, HttpServletRequest request) {
         List<FileVO> results = new ArrayList<>();
 
         // 1. 为这一批次生成一个共用的 uploadToken (用于后续上传者管理)
@@ -354,6 +384,11 @@ public class FileUploadServiceImpl implements FileUploadService {
             MultipartFile file = files.get(i);
             totalSize += file.getSize(); // 累计总大小
 
+            // 获取当前文件对应的全量 Hash
+            String currentFullHash = (fullHashes != null && fullHashes.size() > i)
+                    ? fullHashes.get(i)
+                    : null;
+
             // 核心修改：根据索引 i 获取对应的采样哈希
             String currentSampleHash = (sampleHashes != null && sampleHashes.size() > i)
                     ? sampleHashes.get(i)
@@ -363,7 +398,7 @@ public class FileUploadServiceImpl implements FileUploadService {
             // 注意：你需要重构你底层的保存方法，使其接受外部传入的 code
             FileVO fileVO = this.uploadFile(file, lat, lng, radius,
                     maxDownloads, validMinutes,
-                    false,batchUploadToken,currentSampleHash);
+                    needCode,batchUploadToken,currentSampleHash,currentFullHash);
 
             // 手动给返回对象塞入共用的取件码，让前端能显示
             if (downloadCode != null) {
@@ -397,17 +432,17 @@ public class FileUploadServiceImpl implements FileUploadService {
             // -------------------------
         }
 
-        if (Boolean.TRUE.equals(needCode)) {
-            // 根据这一批次共用的 Token，一次性更新所有文件的私有标识
-            fileService.update(null, new LambdaUpdateWrapper<File>()
-                    .eq(File::getUploadToken, batchUploadToken)
-                    .set(File::getIsPrivate, 1));
-            log.info("已批量更新批次 {} 的私有标识为 1", batchUploadToken);
-        }
+//        if (Boolean.TRUE.equals(needCode)) {
+//            // 根据这一批次共用的 Token，一次性更新所有文件的私有标识
+//            fileService.update(null, new LambdaUpdateWrapper<File>()
+//                    .eq(File::getUploadToken, batchUploadToken)
+//                    .set(File::getIsPrivate, 1));
+//            log.info("已批量更新批次 {} 的私有标识为 1", batchUploadToken);
+//        }
 
         // 4. 将取件码与这批文件的关系存入 Redis (如果你之前的逻辑是存 Redis)
         // 建议存：code -> batchUploadToken，这样通过一个码就能找到一组文件
-        if (downloadCode != null) {
+        if (Boolean.TRUE.equals(needCode) && downloadCode != null) {
 
             long expireMinutes = (validMinutes != null && validMinutes > 0) ? validMinutes : 30;
             // 绑定：取件码 -> 批量Token
@@ -786,6 +821,26 @@ public class FileUploadServiceImpl implements FileUploadService {
                 .map(this::convertToFileVO)
                 .collect(Collectors.toList());
     }
+
+    @Override
+    public List<FileVO> getFilesByUploadToken(String uploadToken) {
+        // 1. 直接查询数据库中该 Token 下 status 为 1 或 3 的文件
+        List<File> fileEntities = fileService.list(new LambdaQueryWrapper<File>()
+                .eq(File::getUploadToken, uploadToken)
+                .in(File::getStatus, Arrays.asList(1, 3))
+                .eq(File::getDeleted, 0));
+
+        // 2. 如果文件全部被删除了，也要返回空列表，让前端知道该批次已失效
+        if (fileEntities == null || fileEntities.isEmpty()) {
+            return null;
+        }
+
+        // 3. 转化为 VO
+        return fileEntities.stream()
+                .map(this::convertToFileVO) // 复用你现有的转化方法
+                .collect(Collectors.toList());
+    }
+
     /**
      * 生成上传令牌
      */
@@ -810,6 +865,32 @@ public class FileUploadServiceImpl implements FileUploadService {
                 ? dto.getUploadToken()
                 : generateUploadToken();
 
+        // ======= 新增逻辑：处理秒传场景下的私有取件码 =======
+        String downloadCode = null;
+        if (Boolean.TRUE.equals(dto.getNeedCode())) {
+            // 先查数据库里这个批次是否已经有码了
+            FileBatch existingBatch = fileBatchService.getOne(new LambdaQueryWrapper<FileBatch>()
+                    .eq(FileBatch::getBatchToken, batchUploadToken));
+
+            if (existingBatch != null && existingBatch.getExtractCode() != null) {
+                // 情况 A：批次已存在且已有码，直接沿用
+                downloadCode = existingBatch.getExtractCode();
+            } else {
+                // 情况 B：该批次第一个进来的文件，需要生成新码并绑定 Redis
+                downloadCode = verificationCodeService.generateDownloadCode();
+
+                long expireMinutes = (dto.getValidMinutes() != null && dto.getValidMinutes() > 0)
+                        ? dto.getValidMinutes() : 30;
+
+                // 执行 Redis 绑定 (核心缺失逻辑补偿)
+                redisUtil.set("file:download:" + batchUploadToken, downloadCode, expireMinutes, TimeUnit.MINUTES);
+                redisUtil.set("code:to:token:" + downloadCode, batchUploadToken, expireMinutes, TimeUnit.MINUTES);
+
+                log.info("秒传批次首个文件：生成取件码 {} 并绑定至 Token {}", downloadCode, batchUploadToken);
+            }
+        }
+        // =================================================
+
         // 3. 调用业务落库 (File, Limit, Redis)
         FileVO vo = this.executeBusinessRecordSave(dto.getFileName(), dto.getHash(),
                 hashRecord.getFileSize(), hashRecord.getStoragePath(),
@@ -833,7 +914,7 @@ public class FileUploadServiceImpl implements FileUploadService {
             try {
                 FileBatch batch = new FileBatch();
                 batch.setBatchToken(batchUploadToken);
-                batch.setExtractCode(vo.getDownloadCode()); // 只有第一个请求生成的 Code 会存入表
+                batch.setExtractCode(downloadCode); // 只有第一个请求生成的 Code 会存入表
                 batch.setClientIp(getClientIp(request));
                 batch.setFileCount(1);
                 batch.setTotalSize(hashRecord.getFileSize());
@@ -853,8 +934,8 @@ public class FileUploadServiceImpl implements FileUploadService {
 
 
         // 【同步 Code】确保返回给前端的 Code 是批次表中最终那个，避免前端弹窗不一致
-        FileBatch finalBatch = fileBatchService.getOne(new LambdaQueryWrapper<FileBatch>().eq(FileBatch::getBatchToken, batchUploadToken));
-        vo.setDownloadCode(finalBatch.getExtractCode());
+        //FileBatch finalBatch = fileBatchService.getOne(new LambdaQueryWrapper<FileBatch>().eq(FileBatch::getBatchToken, batchUploadToken));
+        vo.setDownloadCode(downloadCode);
         return vo;
     }
 
@@ -926,7 +1007,8 @@ public class FileUploadServiceImpl implements FileUploadService {
     /**
      * 转换为FileVO
      */
-    private FileVO convertToFileVO(File file) {
+    @Override
+    public FileVO convertToFileVO(File file) {
         FileVO vo = new FileVO();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         vo.setId(file.getId());

@@ -14,6 +14,13 @@ import com.geofile.util.RedisUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.connection.RedisGeoCommands;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.domain.geo.Metrics;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -25,6 +32,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
 * @author xela
@@ -47,6 +55,9 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
 
     @Autowired
     private FileHashService fileHashService;
+
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
 
     @Override
     public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId,
@@ -79,13 +90,32 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
                 }
             } else {
                 // 【无码模式】：执行1km周边过滤
-                double latDelta = radius / 111000.0;
-                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
-                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
-                        .eq(File::getIsPrivate, 0) // 没码只能看公开
-                        .isNotNull(File::getLocationLat)
-                        .isNotNull(File::getLocationLng);
+//                double latDelta = radius / 111000.0;
+//                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+//                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
+//                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
+//                        .eq(File::getIsPrivate, 0) // 没码只能看公开
+//                        .isNotNull(File::getLocationLat)
+//                        .isNotNull(File::getLocationLng);
+                // 【无码模式】：核心修改 -> 使用 Redis 搜索附近 Token
+                String geoKey = "file:locations:public";
+                // 搜索半径内所有 Member (即 uploadToken)
+                Circle circle = new Circle(new Point(lng, lat), new Distance(radius, Metrics.METERS));
+                GeoResults<RedisGeoCommands.GeoLocation<Object>> geoResults = redisTemplate.opsForGeo().radius(geoKey, circle);
+
+                if (geoResults == null || geoResults.getContent().isEmpty()) {
+                    return new ArrayList<>(); // 附近没东西，直接返回
+                }
+
+                // 提取所有在范围内的 Token
+                List<String> nearbyTokens = geoResults.getContent().stream()
+                        .map(res -> res.getContent().getName().toString())
+                        .collect(Collectors.toList());
+                log.info("Redis搜索结果：找到 {} 个候选 Token: {}", nearbyTokens.size(), nearbyTokens);
+
+                // 将这些 Token 作为数据库查询条件
+                queryWrapper.in(File::getUploadToken, nearbyTokens);
+                queryWrapper.eq(File::getIsPrivate, 0); // 无码只能看公开
             }
 
             // --- 公共过滤逻辑（关键词、类型、状态） ---
@@ -141,13 +171,32 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
                 queryWrapper.eq(File::getUploadToken, batchToken);
             } else {
                 // 无码模式
-                double latDelta = radius / 111000.0;
-                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
-                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
-                        .eq(File::getIsPrivate, 0)
-                        .isNotNull(File::getLocationLat)
-                        .isNotNull(File::getLocationLng);
+//                double latDelta = radius / 111000.0;
+//                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
+//                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
+//                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
+//                        .eq(File::getIsPrivate, 0)
+//                        .isNotNull(File::getLocationLat)
+//                        .isNotNull(File::getLocationLng);
+                // 【无码模式】：核心修改 -> 使用 Redis 获取附近的 Token 集合
+                String geoKey = "file:locations:public";
+                // 1. 定义搜索范围（圆形）
+                Circle circle = new Circle(new Point(lng, lat), new Distance(radius, Metrics.METERS));
+                // 2. 从 Redis 中查出所有在范围内的 uploadToken
+                GeoResults<RedisGeoCommands.GeoLocation<Object>> geoResults = redisTemplate.opsForGeo().radius(geoKey, circle);
+
+                if (geoResults == null || geoResults.getContent().isEmpty()) {
+                    return 0L; // 附近没有任何 Token，数量直接为 0
+                }
+
+                // 3. 提取 Token 列表
+                List<String> nearbyTokens = geoResults.getContent().stream()
+                        .map(res -> res.getContent().getName().toString())
+                        .collect(Collectors.toList());
+
+                // 4. 将 Token 集合作为 MySQL 的 IN 条件
+                queryWrapper.in(File::getUploadToken, nearbyTokens);
+                queryWrapper.eq(File::getIsPrivate, 0); // 必须是公开文件
             }
 
             // 公共过滤

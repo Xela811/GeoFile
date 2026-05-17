@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
@@ -37,6 +38,9 @@ public class FileDeleteController {
 
     @Autowired
     private FileHashService fileHashService;
+
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
 
     /**
      * 通过上传令牌删除文件
@@ -83,6 +87,41 @@ public class FileDeleteController {
             file.setStatus(0);
             file.setDeleted(1);
             fileService.updateById(file);
+
+            // ======= 核心修改：同步清理 RedisGEO =======
+            String currentToken = file.getUploadToken();
+            // 检查该批次是否还有“活着”的文件（status 为 1-正常 或 3-满额残留）
+            long aliveCount = fileService.count(new LambdaQueryWrapper<File>()
+                    .eq(File::getUploadToken, currentToken)
+                    .in(File::getStatus, Arrays.asList(1, 3))
+                    .eq(File::getDeleted, 0));
+
+            if (aliveCount == 0) {
+//                // 说明该批次（Token）下的所有文件都已进入 status=0 (手动删除) 或被逻辑删除
+//                String geoKey = "file:locations:public";
+//                redisTemplate.opsForZSet().remove(geoKey, currentToken);
+//                log.info("该批次文件已全部删除，同步清理 RedisGEO 索引: token={}", currentToken);
+                boolean isPrivate = file.getIsPrivate() != null && file.getIsPrivate() == 1;
+                // 1. 【精准清理】判断批次类型
+                // 建议查询一下该批次的信息，或者看 file 表记录
+                if (isPrivate) {
+                    // --- 处理私有文件清理 ---
+                    // 先查出 code，再删掉双向索引
+                    String codeKey = "file:download:" + currentToken;
+                    String downloadCode = (String) redisUtil.get(codeKey);
+                    if (downloadCode != null) {
+                        redisUtil.del(codeKey);
+                        redisUtil.del("code:to:token:" + downloadCode);
+                        log.info("该私有批次已全部删除，同步清理 Redis 取件码关系: token={}", currentToken);
+                    }
+                } else {
+                    // --- 处理公开文件清理 ---
+                    String geoKey = "file:locations:public";
+                    redisTemplate.opsForZSet().remove(geoKey, currentToken);
+                    log.info("该公开批次已全部删除，同步清理 RedisGEO 索引: token={}", currentToken);
+                }
+            }
+            // ===========================================
 
             log.info("文件删除成功: fileId={}", fileId);
             return Result.success("文件删除成功");
@@ -147,6 +186,9 @@ public class FileDeleteController {
                 return Result.error("未找到该批次文件或已全部删除");
             }
 
+            // 识别批次属性（以第一条文件为准即可）
+            boolean isPrivate = files.get(0).getIsPrivate() != null && files.get(0).getIsPrivate() == 1;
+
             for (File f : files) {
                 // --- 核心修改：循环处理每一个文件的哈希引用 ---
                 if (f.getFileHash() != null) {
@@ -157,15 +199,21 @@ public class FileDeleteController {
                 f.setDeleted(1);
                 fileService.updateById(f);
             }
-
-            String redisDownloadKey = "file:download:" + token;
-            Object codeObj = redisUtil.get(redisDownloadKey);
-            if (codeObj != null) {
-                redisUtil.del("code:to:token:" + codeObj.toString());
+            if(isPrivate) {
+                String redisDownloadKey = "file:download:" + token;
+                Object codeObj = redisUtil.get(redisDownloadKey);
+                if (codeObj != null) {
+                    redisUtil.del("code:to:token:" + codeObj.toString());
+                }
+                redisUtil.del(redisDownloadKey);
+            } else {
+                // 公开模式：清理 Redis GEO 索引
+                String geoKey = "file:locations:public";
+                redisTemplate.opsForZSet().remove(geoKey, token);
+                log.info("已清理公开批次 RedisGEO 索引: token={}", token);
             }
-            redisUtil.del(redisDownloadKey);
-
-            log.info("批次删除成功: uploadToken={}, 文件数={}", token, files.size());
+            log.info("批次删除成功: uploadToken={}, 类型={}, 文件数={}",
+                    token, isPrivate ? "私有" : "公开", files.size());
             Map<String, Object> data = new HashMap<>();
             data.put("deletedCount", files.size());
             return Result.success(data);

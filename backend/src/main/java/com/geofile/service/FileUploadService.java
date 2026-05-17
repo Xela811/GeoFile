@@ -27,9 +27,9 @@ public interface FileUploadService {
 
     @Transactional
     FileVO uploadFile(MultipartFile file, Double lat, Double lng, Integer radius,
-                      Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, String sampleHash);
+                      Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, String sampleHash, String fullHash);
 
-    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, List<String> sampleHashes, HttpServletRequest request);
+    List<FileVO> uploadFilesWithLocation(List<MultipartFile> files, Double lat, Double lng, Integer radius, Integer maxDownloads, Integer validMinutes, Boolean needCode, String providedToken, List<String> sampleHashes, List<String> fullHashes, HttpServletRequest request);
     /**
      * 上传多个文件
      * @param files 上传的文件列表
@@ -84,6 +84,10 @@ public interface FileUploadService {
 
     List<FileVO> verifyAndGetFiles(String code);
 
+    List<FileVO> getFilesByUploadToken(String uploadToken);
+
     @Transactional
     FileVO secUpload(SecUploadDTO dto, HttpServletRequest request);
+
+    FileVO convertToFileVO(File file); // 添加这一行
 }

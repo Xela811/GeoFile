@@ -199,6 +199,7 @@ const emit = defineEmits<{
   'upload-change': [files: UploadUserFile[]]
   'upload-success': [fileData: any]
   'require-limit-config': []
+  'update:loading': [value: boolean]
 }>()
 
 // 状态
@@ -218,6 +219,11 @@ watch(
   },
   { deep: true },
 )
+
+// 使用 watch 实时同步状态给父组件
+watch(isUploading, (newVal) => {
+  emit('update:loading', newVal);
+});
 
 // 文件验证
 const allowedTypes = [
@@ -366,7 +372,8 @@ const startUpload = async () => {
     return
   }
 
-  isUploading.value = true
+  isUploading.value = true;
+  emit('update:loading',true);
   let sharedUploadToken = "";
 
   try {
@@ -412,9 +419,15 @@ for (const file of fileList.value) {
         size: file.raw.size,
         sampleHash: currentSampleHash
       });
-      let fileHash = "";
+      // 【核心修改】无论快检命中与否，都计算全量 Hash
+  // 这样保证了：快检命中 -> 尝试秒传；快检不命中 -> 物理上传时带着 Hash 减少服务器计算
+  const fileHash = await calculateSha256(file.raw as File, (p) => {
+    file.percentage = Math.floor(p * 0.4); 
+  });
 
-      if (quickCheck.data.data.canPotentiallySecUpload) {
+  let isSecSuccess = false;
+
+      /*if (quickCheck.data.data.canPotentiallySecUpload) {
           // 快检命中，才花时间算全量
           fileHash = await calculateSha256(file.raw as File, (p) => {
             file.percentage = Math.floor(p * 0.4); 
@@ -422,15 +435,13 @@ for (const file of fileList.value) {
       } else {
           // 快检未命中，直接判定无法秒传
           file.percentage = 40;
-      }
+      }*/
       
     
     
       // 2. 发起预检请求（你需要新增这个后端接口）
-      let isSecSuccess = false;
-      console.log('快检结果:', quickCheck.data.data.canPotentiallySecUpload);
-console.log('计算出的全量Hash:', fileHash);
-      if(fileHash) {
+      
+      if(quickCheck.data.data.canPotentiallySecUpload && fileHash) {
       const checkRes = await axios.post('/api/file/sec-upload', {
         
           hash: fileHash,
@@ -465,6 +476,8 @@ console.log('计算出的全量Hash:', fileHash);
         // --- 分支 B: 秒传失败，准备正常上传 ---
         formData.append('files', file.raw);
         formData.append('sampleHashes', currentSampleHash);
+        // 新增：将算好的全量 Hash 传给后端
+        formData.append('fullHashes', fileHash);
         hasFilesToUpload = true;
       }
     }
@@ -556,7 +569,8 @@ if (!sharedUploadToken) sharedUploadToken = response.data.data[0].uploadToken
     ElMessage.error(e.message || '上传过程中发生错误')
     emit('error', e)
   } finally {
-    isUploading.value = false
+    isUploading.value = false;
+    emit('update:loading',false);
   }
   
 }

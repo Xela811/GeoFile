@@ -10,12 +10,12 @@ import com.geofile.service.FileService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
 
 @Component
 @Slf4j
@@ -26,6 +26,9 @@ public class FileLifecycleTask {
     @Autowired
     private FileHashService fileHashService;
 
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
+
     @Value("${file.upload.path}")
     private String uploadPath;
 
@@ -35,20 +38,7 @@ public class FileLifecycleTask {
      */
     @Scheduled(cron = "0 0/15 * * * ?")
     public void handleFileExpiration() {
-//        // 逻辑 A：处理时间过期 (1 -> 2)
-//        fileService.update(new LambdaUpdateWrapper<File>()
-//                .set(File::getStatus, 2)
-//                .eq(File::getStatus, 1)
-//                .lt(File::getExpireTime, new Date()));
-//
-//        // 逻辑 B：处理残影到期 (3 -> 4)
-//        // 凡是状态为 3 的，说明它们已经至少经历了一次下载满额，
-//        // 并在当前 15 分钟周期内停留过。现在统一将其设为 4 (不再可见)
-//        fileService.update(new LambdaUpdateWrapper<File>()
-//                .set(File::getStatus, 4)
-//                .eq(File::getStatus, 3));
-//
-//        log.info("定时任务：已清理过期文件，并下架了上一周期的满额残影文件");
+
         Date now = new Date();
 
         // 1. 找出所有：即将过期的(status=1且时间到) 或 即将从残影下架的(status=3) 文件
@@ -66,6 +56,9 @@ public class FileLifecycleTask {
 
         if (expiringFiles.isEmpty()) return;
 
+        // 用于记录这一批任务中涉及到的所有 Token，稍后统一检查
+        Set<String> tokensToCheck = new HashSet<>();
+
         for (File f : expiringFiles) {
             try {
                 // 2. 核心逻辑：执行引用计数减1
@@ -81,11 +74,30 @@ public class FileLifecycleTask {
                 }
                 f.setDeleted(1); // 建议过期也标记为逻辑删除，统一查询口径
                 fileService.updateById(f);
+
+                // 收集 Token
+                if (f.getUploadToken() != null) {
+                    tokensToCheck.add(f.getUploadToken());
+                }
             } catch (Exception e) {
                 log.error("处理文件生命周期异常: fileId={}", f.getId(), e);
             }
         }
 
+        // ======= 新增：清理 RedisGEO 逻辑 =======
+        for (String token : tokensToCheck) {
+            // 检查这个 Token 下是否还有存活的文件 (status 1 或 3)
+            long aliveCount = fileService.count(new LambdaQueryWrapper<File>()
+                    .eq(File::getUploadToken, token)
+                    .in(File::getStatus, Arrays.asList(1, 3))
+                    .eq(File::getDeleted, 0));
+
+            if (aliveCount == 0) {
+                // 说明该批次文件已全部阵亡，从 Redis 中移除地理索引
+                redisTemplate.opsForZSet().remove("file:locations:public", token);
+                log.info("Token {} 对应的所有文件已失效，已清理 RedisGEO 索引", token);
+            }
+        }
         log.info("定时任务完成：处理了 {} 个过期/满额文件", expiringFiles.size());
     }
 

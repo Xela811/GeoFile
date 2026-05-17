@@ -36,6 +36,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/HomeView.vue'),
     props: true,
   },
+  // 新增：公开批次分享路径 (b 代表 batch)
+  {
+    path: '/b/:token',
+    name: 'PublicShare',
+    component: () => import('@/views/HomeView.vue'),
+    props: true,
+  },
   {
     path: '/error',
     name: 'ErrorPage',

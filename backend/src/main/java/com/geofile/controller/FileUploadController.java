@@ -116,7 +116,7 @@ public class FileUploadController {
             log.info("文件上传并记录位置: {}, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     file.getOriginalFilename(), lat, lng, radius, maxDownloads, validMinutes);
 
-            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes, needCode, null, null);
+            FileVO result = fileUploadService.uploadFile(file, lat, lng, radius, maxDownloads, validMinutes, needCode, null, null,null);
 
             return Result.success(result);
 
@@ -166,12 +166,13 @@ public class FileUploadController {
             @RequestParam(required = false, defaultValue = "true") Boolean needCode,
             @RequestParam(required = false) String providedToken,
             @RequestParam(required = false) List<String> sampleHashes,
+            @RequestParam(required = false) List<String> fullHashes,
             HttpServletRequest request) {
         try {
             log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     files.length, lat, lng, radius, maxDownloads, validMinutes);
 
-            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode, providedToken, sampleHashes, request);
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode, providedToken, sampleHashes, fullHashes, request);
 
             return Result.success(results);
 
@@ -345,6 +346,14 @@ public class FileUploadController {
         }
     }
 
+    @GetMapping("/detail/{fileId}")
+    @Operation(summary = "获取文件最新详情")
+    public Result<FileVO> getFileDetail(@PathVariable Long fileId) {
+        com.geofile.entity.File file = fileService.getById(fileId);
+        if (file == null) return Result.error("文件不存在");
+        return Result.success(fileUploadService.convertToFileVO(file));
+    }
+
     private ResponseEntity<?> redirectToErrorPage(String message) {
         try {
             // 对中文消息进行编码，防止 URL 乱码
@@ -393,6 +402,31 @@ public class FileUploadController {
             List<FileVO> fileVOs = fileUploadService.verifyAndGetFiles(code);
             return Result.success(fileVOs);
         } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 通过上传令牌获取文件列表（用于公开批次管理刷新/对账）
+     */
+    @GetMapping("/list-by-token")
+    @Operation(summary = "通过Token获取文件列表", description = "用于前端公开批次管理的自动刷新和状态校验")
+    public Result<List<FileVO>> getFilesByToken(@RequestParam String uploadToken) {
+        if (uploadToken == null || uploadToken.trim().isEmpty()) {
+            return Result.error("uploadToken不能为空");
+        }
+
+        try {
+            // 调用 Service 层新方法
+            List<FileVO> fileVOs = fileUploadService.getFilesByUploadToken(uploadToken);
+
+            // 修改点：如果 list 为空，说明 Token 无效，显式告知前端
+            if (fileVOs == null || fileVOs.isEmpty()) {
+                return Result.error("分享链接已失效或不包含有效文件");
+            }
+
+            return Result.success(fileVOs);
+        } catch (Exception e) {
             return Result.error(e.getMessage());
         }
     }
