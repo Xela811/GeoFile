@@ -4,17 +4,17 @@ import com.geofile.dto.QuickCheckDTO;
 import com.geofile.dto.SecUploadDTO;
 import com.geofile.entity.*;
 import com.geofile.exception.DownloadException;
-import com.geofile.service.FileHashService;
+import com.geofile.service.*;
+import com.geofile.util.IpUtils;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.UrlResource;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.CollectionUtils;
 import com.geofile.common.Result;
-import com.geofile.service.FileUploadService;
-import com.geofile.service.DownloadLimitService;
-import com.geofile.service.FileService;
 import com.geofile.util.RedisUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -63,6 +63,12 @@ public class FileUploadController {
 
     @Autowired
     private FileHashService fileHashService;
+
+    @Autowired
+    private FileLogService fileLogService;
+
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
 
     @Value("${file.upload.path}")
     private String uploadPath;
@@ -168,16 +174,22 @@ public class FileUploadController {
             @RequestParam(required = false) List<String> sampleHashes,
             @RequestParam(required = false) List<String> fullHashes,
             HttpServletRequest request) {
+        String clientIp = IpUtils.getClientIp(request);
         try {
             log.info("批量文件上传并记录位置: {} 个文件, lat={}, lng={}, radius={}, 下载限制: {}次, 有效时长: {}分钟",
                     files.length, lat, lng, radius, maxDownloads, validMinutes);
 
             List<FileVO> results = fileUploadService.uploadFilesWithLocation(List.of(files), lat, lng, radius, maxDownloads, validMinutes, needCode, providedToken, sampleHashes, fullHashes, request);
-
+            if (!CollectionUtils.isEmpty(results)) {
+                for (FileVO vo : results) {
+                    fileLogService.recordLog(vo.getId(), "BATCH_UPLOAD_WITH_LOCATION", 1, "批量带位置上传成功", lat, lng, clientIp);
+                }
+            }
             return Result.success(results);
 
         } catch (Exception e) {
             log.error("批量文件上传失败", e);
+            fileLogService.recordLog(null, "BATCH_UPLOAD_WITH_LOCATION", 0, "批量位置上传失败: " + e.getMessage(), lat, lng, clientIp);
             return Result.error("批量文件上传失败: " + e.getMessage());
         }
     }
@@ -185,17 +197,21 @@ public class FileUploadController {
     @PostMapping("/sec-upload")
     @Operation(summary = "文件秒传", description = "根据指纹校验实现秒传，支持加入现有批次")
     public Result<FileVO> secUpload(@RequestBody SecUploadDTO dto, HttpServletRequest request) {
+        String clientIp = IpUtils.getClientIp(request);
+
         try {
             log.info("接收到秒传请求: fileName={}, hash={}", dto.getFileName(), dto.getHash());
             FileVO result = fileUploadService.secUpload(dto, request);
 
             if (result != null) {
+                fileLogService.recordLog(result.getId(), "SEC_UPLOAD", 1, "秒传命中成功", dto.getLat(), dto.getLng(), clientIp);
                 return Result.success(result);
             } else {
                 // 404 状态码告诉前端：指纹不存在，请走普通上传逻辑
                 return Result.error(404, "未命中秒传，请执行完整上传");
             }
         } catch (Exception e) {
+            fileLogService.recordLog(null, "SEC_UPLOAD", 0, e.getMessage(), dto.getLat(), dto.getLng(), clientIp);
             log.error("秒传处理失败", e);
             return Result.error("秒传失败: " + e.getMessage());
         }
@@ -292,13 +308,21 @@ public class FileUploadController {
     @Operation(summary = "下载文件", description = "通过下载令牌验证后下载文件")
     public ResponseEntity<?> downloadFile(
             @PathVariable Long fileId,
-            @RequestParam String token) {
+            @RequestParam String token,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        String clientIp = IpUtils.getClientIp(request);
 
         try {
-            log.info("请求下载文件: fileId={}, token={}", fileId, token);
+            log.info("请求下载文件: fileId={}, token={}, lat={}, lng={}", fileId, token, lat, lng);
+
+            // 允许前端跨域提取 Content-Disposition 响应头获取真实文件名
+            response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
 
             // 1. 验证并获取文件
-            com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token);
+            com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token, lat, lng);
 
             // 2. 构建文件路径
             java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath)
@@ -307,6 +331,7 @@ public class FileUploadController {
 
             if (!java.nio.file.Files.exists(fullPath)) {
                 log.error("物理文件丢失，数据库记录路径: {}, 拼接后的绝对路径: {}", file.getFilePath(), fullPath);
+                fileLogService.recordLog(fileId, "DOWNLOAD", 0, "物理文件在服务器上丢失", lat, lng, clientIp);
                 return ResponseEntity.notFound().build();
             }
 
@@ -332,6 +357,8 @@ public class FileUploadController {
 
             log.info("文件下载成功: {}, 大小: {} bytes", file.getFileName(), file.getFileSize());
 
+            fileLogService.recordLog(fileId, "DOWNLOAD", 1, null, lat, lng, clientIp);
+
             // 5. 返回文件内容
             return ResponseEntity.ok()
                     .headers(headers)
@@ -339,19 +366,109 @@ public class FileUploadController {
 
         } catch (DownloadException e) {
             log.warn("拦截下载请求: {}", e.getMessage());
+
+            fileLogService.recordLog(fileId, "DOWNLOAD", 0, e.getMessage(), lat, lng, clientIp);
+
+            //  判断是否是前端 fetch 发起的异步请求
+            String requestedWith = request.getHeader("X-Requested-With");
+            if ("XMLHttpRequest".equals(requestedWith)) {
+                // 如果是前端中转页调用的，体面地返回 400 状态码和标准错误 JSON
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Result.error(e.getMessage()));
+            }
+
             return redirectToErrorPage(e.getMessage());
         } catch (Exception e) {
             log.error("下载接口崩溃", e);
+
+            fileLogService.recordLog(fileId, "DOWNLOAD", 0, "系统故障: " + e.getMessage(), lat, lng, clientIp);
+
+            String requestedWith = request.getHeader("X-Requested-With");
+            if ("XMLHttpRequest".equals(requestedWith)) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Result.error("服务器繁忙，请稍后再试"));
+            }
+
             return redirectToErrorPage("服务器繁忙，请稍后再试");
         }
     }
 
     @GetMapping("/detail/{fileId}")
     @Operation(summary = "获取文件最新详情")
-    public Result<FileVO> getFileDetail(@PathVariable Long fileId) {
+    public Result<FileVO> getFileDetail(
+            @PathVariable Long fileId,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng) {
+
+        log.info("============== 🔍 详情接口地理校验断点开始 ==============");
+        log.info("1. 前端传来的请求参数 -> fileId: {}, lat: {}, lng: {}", fileId, lat, lng);
+
         com.geofile.entity.File file = fileService.getById(fileId);
-        if (file == null) return Result.error("文件不存在");
-        return Result.success(fileUploadService.convertToFileVO(file));
+        if (file == null) {
+            log.warn("拦截：数据库未找到对应文件记录");
+            return Result.error("文件不存在");
+        }
+
+        FileVO fileVO = fileUploadService.convertToFileVO(file);
+
+        // 开始空间校验
+        if (lat != null && lng != null && file.getDownloadToken() != null && file.getIsPrivate() == 0) {
+            try {
+                String GEO_KEY = "file:locations:public";
+                String memberKey = file.getUploadToken();
+
+                log.info("2. 准备去 Redis 查询 -> Key: '{}', Member(uploadToken): '{}'", GEO_KEY, memberKey);
+
+                // 检查这个 member 到底在不在 Redis 里
+                java.util.List<org.springframework.data.geo.Point> posList =
+                        redisTemplate.opsForGeo().position(GEO_KEY, memberKey);
+
+                if (posList == null || posList.isEmpty() || posList.get(0) == null) {
+                    log.error("🚨 警告：Redis 的 GeoKey '{}' 中【根本没有】这个成员 '{}'！", GEO_KEY, memberKey);
+                    fileVO.setDistanceExceeded(true); // 查不到强制判定为超距
+                } else {
+                    org.springframework.data.geo.Point redisPoint = posList.get(0);
+                    log.info("3. Redis 内部存储的真实坐标 -> lng: {}, lat: {}", redisPoint.getX(), redisPoint.getY());
+
+                    // =================== 🛠️ 修复核心：改用内存计算，避开 Redis 报错坑 ===================
+                    // 算出两点之间的物理距离（单位：米）
+                    double meters = calculateDistanceInMeters(lat, lng, redisPoint.getY(), redisPoint.getX());
+                    log.info("4. 🚀 内存基于 GPS 算出来的物理距离: {} 米", meters);
+
+                    if (meters > 1000.0) {
+                        log.warn("❌ 判定结果：距离为 {} 米，已超出 1000 米限制！成功标记为 true！", meters);
+                        fileVO.setDistanceExceeded(true); // 标记超距
+                    } else {
+                        log.info("✅ 判定结果：距离在 1km 以内，准许下载。");
+                    }
+                    // ==============================================================================
+                }
+            } catch (Exception e) {
+                log.error("🚨 空间计算爆发异常", e);
+                fileVO.setDistanceExceeded(true); // 发生异常时稳妥起见，设为超距拦截
+            }
+        } else {
+            log.info("跳过校验：参数不全（lat/lng 为 null 或免校验）");
+        }
+
+        log.info("============== 🔍 详情接口地理校验断点结束 ==============");
+        return Result.success(fileVO);
+    }
+
+    /**
+     * 使用半正矢公式(Haversine)计算两组经纬度之间的地面物理距离(米)
+     */
+    private double calculateDistanceInMeters(double lat1, double lng1, double lat2, double lng2) {
+        double EARTH_RADIUS = 6371000; // 地球半径，单位：米
+        double radLat1 = Math.toRadians(lat1);
+        double radLat2 = Math.toRadians(lat2);
+        double a = radLat1 - radLat2;
+        double b = Math.toRadians(lng1) - Math.toRadians(lng2);
+
+        double s = 2 * Math.asin(Math.sqrt(
+                Math.pow(Math.sin(a / 2), 2) + Math.cos(radLat1) * Math.cos(radLat2) * Math.pow(Math.sin(b / 2), 2)
+        ));
+        return s * EARTH_RADIUS;
     }
 
     private ResponseEntity<?> redirectToErrorPage(String message) {
@@ -460,7 +577,8 @@ public class FileUploadController {
     ).collect(Collectors.toSet());
 
     @GetMapping("/preview/{fileId}")
-    public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token) {
+    public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token,HttpServletRequest request) {
+        String clientIp = IpUtils.getClientIp(request);
         try {
             // 1. 业务逻辑校验（包含计数+1）
             com.geofile.entity.File fileEntity = fileService.processAccess(fileId, token);
@@ -468,6 +586,7 @@ public class FileUploadController {
             java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath, fileEntity.getFilePath()).normalize();
             java.io.File diskFile = fullPath.toFile();
             if (!diskFile.exists()) {
+                fileLogService.recordLog(fileId, "PREVIEW", 0, "物理文件丢失无法预览", null, null, clientIp);
                 return ResponseEntity.notFound().build();
             }
             Resource resource = new UrlResource(diskFile.toURI());
@@ -496,6 +615,8 @@ public class FileUploadController {
                 contentType = "application/octet-stream";
             }
 
+            fileLogService.recordLog(fileId, "PREVIEW", 1, null, null, null, clientIp);
+
             // 3. 构建响应头
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(contentType))
@@ -509,9 +630,11 @@ public class FileUploadController {
                     .body(resource);
 
         } catch (IllegalArgumentException e) {
+            fileLogService.recordLog(fileId, "PREVIEW", 0, "鉴权拒绝: " + e.getMessage(), null, null, clientIp);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         } catch (Exception e) {
             log.error("预览失败", e);
+            fileLogService.recordLog(fileId, "PREVIEW", 0, "内部错误: " + e.getMessage(), null, null, clientIp);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }

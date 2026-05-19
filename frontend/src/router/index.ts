@@ -44,6 +44,11 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    path: '/download-redirect',
+    name: 'DownloadRedirect',
+    component: () => import('@/views/DownloadRedirectView.vue'),
+  },
+  {
     path: '/error',
     name: 'ErrorPage',
     component: () => import('@/views/ErrorView.vue'),

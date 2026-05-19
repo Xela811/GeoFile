@@ -83,6 +83,7 @@ public class FileUploadServiceImpl implements FileUploadService {
 
     @Autowired
     private VerificationCodeService verificationCodeService;
+
     @Autowired
     private FileMapper fileMapper;
 
@@ -690,7 +691,7 @@ public class FileUploadServiceImpl implements FileUploadService {
     }
 
     @Override
-    public File downloadFile(Long fileId, String downloadToken) {
+    public File downloadFile(Long fileId, String downloadToken, Double lat, Double lng) {
         try {
             // 1. 查询文件
             File file = fileService.getById(fileId);
@@ -704,6 +705,30 @@ public class FileUploadServiceImpl implements FileUploadService {
                 log.warn("下载令牌验证失败: fileId={}, token={}", fileId, downloadToken);
                 throw new DownloadException("无效的下载令牌");
             }
+
+            // ================= 【新增逻辑】直链地理围栏强校验 =================
+            // 如果文件本身有限制（比如 location_lat 不为 null），说明需要进行围栏校验
+            if (file.getIsPrivate() != null && file.getIsPrivate() == 0 && file.getLocationLat() != null && file.getLocationLng() != null) {
+                // 如果前端没有传来经纬度，直接拒绝
+                if (lat == null || lng == null) {
+                    log.warn("直链下载拦截：该文件开启了地理限制，但未提供位置参数。fileId={}", fileId);
+                    throw new DownloadException("此链接受地理范围保护，请允许浏览器获取定位后下载");
+                }
+
+                // 使用哈弗辛公式计算用户当前位置与文件分享位置的距离
+                double meters = calculateDistanceInMeters(lat, lng, file.getLocationLat(), file.getLocationLng());
+                log.info("直链下载校验 -> 用户位置({}, {}), 文件限制圈中心({}, {}), 计算距离: {} 米",
+                        lat, lng, file.getLocationLat(), file.getLocationLng(), meters);
+
+                // 校验是否超出 1000 米限制（也可以动态读取数据库的 file.getLocationRadius()）
+                double maxRadius = file.getLocationRadius() != null ? file.getLocationRadius() : 1000.0;
+                if (meters > maxRadius) {
+                    log.warn("直链下载拦截：用户距离 {} 米，超出 {} 米限制！", meters, maxRadius);
+                    throw new DownloadException("超出分享范围，您无法下载此文件");
+                }
+                log.info("直链下载校验通过：距离在范围内。");
+            }
+            // =============================================================
 
             // 【新增逻辑】校验物理文件状态 (兼容 SHA256)
             // 确保物理表中的记录未被逻辑删除（status=1表示正常）
@@ -756,6 +781,7 @@ public class FileUploadServiceImpl implements FileUploadService {
             // 6. 保存到数据库
             fileService.updateById(file);
 
+
             log.info("文件下载成功: fileId={}, fileName={}, 下载次数={}", fileId, file.getFileName(), file.getDownloadCount());
 
             return file;
@@ -766,6 +792,18 @@ public class FileUploadServiceImpl implements FileUploadService {
             log.error("文件下载系统内部故障: fileId={}", fileId, e);
             throw new RuntimeException("服务器处理下载请求失败: " + e.getMessage());
         }
+    }
+
+    private double calculateDistanceInMeters(double lat1, double lng1, double lat2, double lng2) {
+        double EARTH_RADIUS = 6371000;
+        double radLat1 = Math.toRadians(lat1);
+        double radLat2 = Math.toRadians(lat2);
+        double a = radLat1 - radLat2;
+        double b = Math.toRadians(lng1) - Math.toRadians(lng2);
+        double s = 2 * Math.asin(Math.sqrt(
+                Math.pow(Math.sin(a / 2), 2) + Math.cos(radLat1) * Math.cos(radLat2) * Math.pow(Math.sin(b / 2), 2)
+        ));
+        return s * EARTH_RADIUS;
     }
 
     @Override
@@ -1030,6 +1068,12 @@ public class FileUploadServiceImpl implements FileUploadService {
         vo.setUploadToken(file.getUploadToken());
         vo.setDownloadToken(file.getDownloadToken());
         vo.setIsPrivate(file.getIsPrivate());
+        if (file.getLocationLat() != null) {
+            vo.setLocationLat(file.getLocationLat());
+        }
+        if (file.getLocationLng() != null) {
+            vo.setLocationLng(file.getLocationLng());
+        }
 
         // 直接根据 fileId 去查询关联的下载限制表
         DownloadLimit downloadLimit = downloadLimitService.getOne(

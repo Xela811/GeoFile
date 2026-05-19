@@ -114,4 +114,6 @@ public class FileVO {
      */
     @TableField(value = "is_private")
     private Integer isPrivate;
+
+    private Boolean distanceExceeded = false; // 是否超出距离，默认否
 }

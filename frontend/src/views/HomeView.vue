@@ -13,7 +13,6 @@
     <main class="main-content">
       <!-- 标题区域 -->
       <div class="page-header">
-        <h1>GeoFile - 附近文件</h1>
         <p class="subtitle">基于地理位置的文件共享服务</p>
       </div>
 
@@ -35,56 +34,38 @@
         </el-tag>
       </div>
 
-      <!-- 位置信息卡片 -->
       <el-card class="location-card" v-loading="locationLoading">
         <template #header>
-          <div class="card-header">
-            <span>📍 当前位置</span>
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: bold;"><span class="radar-dot"></span> 📍 共享定位中心</span>
             <el-button
               type="primary"
               :icon="Location"
               :loading="locationLoading"
               @click="handleGetCurrentLocation"
             >
-              {{ locationInfo ? '重新获取' : '获取当前位置' }}
+              {{ locationInfo ? '刷新地理位置' : '扫瞄当前位置' }}
             </el-button>
           </div>
         </template>
 
-        <div v-if="locationInfo" class="location-info">
-          <!-- 坐标信息 -->
-          <div class="info-section">
-            <div class="info-title">📍 坐标</div>
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="纬度">{{
-                locationInfo.lat.toFixed(6)
-              }}</el-descriptions-item>
-              <el-descriptions-item label="经度">{{
-                locationInfo.lng.toFixed(6)
-              }}</el-descriptions-item>
-            </el-descriptions>
-          </div>
-
-          <!-- 详细地址 -->
-          <div class="info-section">
-            <div class="info-title">🏠 详细地址</div>
-            <el-descriptions :column="2" border>
-              <el-descriptions-item label="省份">{{ locationInfo.province }}</el-descriptions-item>
-              <el-descriptions-item label="城市">{{ locationInfo.city }}</el-descriptions-item>
-              <el-descriptions-item label="区县">{{ locationInfo.district }}</el-descriptions-item>
-              <el-descriptions-item label="街道">{{ locationInfo.township }}</el-descriptions-item>
-            </el-descriptions>
-          </div>
-
-          <!-- 完整地址预览 -->
-          <div v-if="locationInfo.formattedAddress" class="formatted-address">
-            <h3>📄 完整地址预览</h3>
-            <el-tag type="success" size="large">
-              {{ locationInfo.formattedAddress }}
+        <div v-if="locationInfo" class="location-info-geek" style="padding: 5px 0; text-align: center;">
+          <div style="display: inline-flex; align-items: center; gap: 12px; font-size: 14px; flex-wrap: wrap; justify-content: center;">
+            <span style="font-weight: bold; color: #409eff;">
+              {{ locationInfo.city || locationInfo.province || '未知城市' }}
+            </span>
+            
+            <span style="color: #dcdfe6;">|</span>
+            
+            <span style="color: #606266;">
+              E {{ locationInfo.lng.toFixed(2) }}° / N {{ locationInfo.lat.toFixed(2) }}°
+            </span>
+            
+            <el-tag :type="useFixedCoordinates ? 'warning' : 'success'" size="small" effect="plain" style="height: 20px; line-height: 18px;">
+              {{ useFixedCoordinates ? '模拟' : 'GPS' }}
             </el-tag>
           </div>
         </div>
-
         <el-empty v-else description="点击上方按钮获取当前位置" />
       </el-card>
 
@@ -194,15 +175,15 @@
               </div>
             </div>
             <div class="file-actions">
-              <el-button 
-    type="primary" 
-    size="small" 
-    :icon="Download"
-    :disabled="isBtnDisabled(file)"
-    @click.stop="handleQuickDownload(file)"
-  >
-    下载文件
-  </el-button>
+              <el-button
+                type="primary"
+                size="small"
+                :icon="Download"
+                :disabled="isBtnDisabled(file)"
+                @click.stop="handleQuickDownload(file)"
+              >
+                下载文件
+              </el-button>
               <el-button type="primary" size="small" @click="viewFileDetail(file)">
                 查看详情
               </el-button>
@@ -477,10 +458,18 @@
               type="primary"
               size="large"
               @click="downloadFile"
-              :disabled="isFileExpiredRealtime || isMaxedOut"
+              :disabled="isFileExpiredRealtime || isMaxedOut || selectedFile?.distanceExceeded"
             >
               <el-icon><Download /></el-icon>
-              {{ isFileExpiredRealtime ? '文件已过期' : isMaxedOut ? '下载次数已满' : '下载文件' }}
+              {{
+                isFileExpiredRealtime
+                  ? '文件已过期'
+                  : isMaxedOut
+                    ? '下载次数已满'
+                    : selectedFile?.distanceExceeded
+                      ? '超出距离限制(>1km)'
+                      : '下载文件'
+              }}
             </el-button>
             <el-button size="large" @click="copyFileLink">
               <el-icon><Link /></el-icon>
@@ -549,7 +538,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed, nextTick} from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -623,12 +612,23 @@ const selectedFile = ref<NearbyFile | null>(null)
 const LOCK_ICON = 'https://api.iconify.design/ep:lock.svg?color=%2367c23a' // 绿色锁
 const LOCATION_ICON = 'https://api.iconify.design/ep:location.svg?color=%23e6a23c' // 橙色定位针
 
-
 // 计算当前选中文件的下载链接
 const currentDownloadUrl = computed(() => {
   if (!selectedFile.value) return ''
   // 保持和你 copyFileLink 函数中的逻辑一致
-  return `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  //return `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  // 保持和 copyFileLink 决策树逻辑完全一致
+  const isPublic = !currentFileIsPrivate.value
+  const hasLocation =
+    selectedFile.value.locationLat !== null && selectedFile.value.locationLat !== undefined
+
+  if (isPublic && hasLocation) {
+    // 公开带位置的文件：生成的二维码指向前端中转页
+    return `${window.location.origin}/download-redirect?fileId=${selectedFile.value.id}&token=${selectedFile.value.downloadToken}`
+  } else {
+    // 私密文件或普通文件：生成的二维码直接指向后端下载流
+    return `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  }
 })
 
 // 获取坐标（支持开发测试使用固定坐标）
@@ -661,15 +661,23 @@ const handleGetCurrentLocation = async () => {
 
     console.log('使用的坐标:', { lat, lng })
 
-    // 2. 获取详细地址信息
-    ElMessage.info('正在解析地址信息...')
-
-    const detailedAddress = await locationService.getDetailedAddress(lat, lng)
+    // 2. 降级高德：不再调 getDetailedAddress 详细接口了，除非想保留粗略城市。
+    // 如果想要无开销的体验，可以直接通过高德的普通 IP/低精度粗略定位，或者直接从本地推算
+    // 为了不报错，我们直接模拟一个干净的粗略结构，或者只调高德只拿城市名，不展示街道
+    let coarseAddress = { province: '', city: '定位成功', district: '', township: '', formattedAddress: '' }
+    try {
+       // 如果你实在想留着城市名，可以调，但界面不要展示具体街道了
+       const detailed = await locationService.getDetailedAddress(lat, lng)
+       coarseAddress.city = detailed.city || detailed.province
+    } catch(e) {
+       coarseAddress.city = "未知区域"
+    }
 
     // 3. 合并位置信息
     locationInfo.value = {
-      ...{ lat, lng },
-      ...detailedAddress,
+      lat,
+      lng,
+      city: coarseAddress.city,
       useFixedCoords: useFixedCoordinates.value,
       updateTime: new Date().toISOString(),
     }
@@ -687,18 +695,43 @@ const handleGetCurrentLocation = async () => {
   }
 }
 
+// 记录上一次真正发起请求时的筛选条件（用于检测用户是否更改了输入）
+const lastSearchKeyword = ref('')
+const lastSearchFileType = ref('')
+
 // 搜索附近文件（会退出「取件码私有列表」视图）
 const handleSearch = async (mode = 'keep') => {
-  if (isExtractListView.value && mode !== 'force' && mode !== 'public') return;
+  //if (isExtractListView.value && mode !== 'force' && mode !== 'public') return
+  // 🌟 核心拦截机制微调：如果当前处于公开分享链接展示模式，直接切入前端本地筛选，安全且速度极快
+  if (isExtractListView.value && mode !== 'force' && mode !== 'public') {
+    console.log('当前处于分享列表视图，执行纯前端多条件筛选...')
+    applyExtractPage() // 触发上面改造好的过滤分页函数
+    return // 结束执行，不去打扰后端接口
+  }
+  
   if (!locationInfo.value?.lat || !locationInfo.value?.lng) {
     ElMessage.warning('请先获取位置信息')
     return
+  }
+
+  const currentKeyword = searchKeyword.value?.trim() || ''
+  const currentFileType = searchFileType.value || ''
+
+  if (currentKeyword !== lastSearchKeyword.value || currentFileType !== lastSearchFileType.value) {
+    console.log('检测到筛选条件发生变更，强行重置当前页码为 1')
+    paginationInfo.value.pageNum = 1
+    // 同步更新旧值记录
+    lastSearchKeyword.value = currentKeyword
+    lastSearchFileType.value = currentFileType
   }
 
   if (mode === 'public') {
     paginationInfo.value.pageNum = 1
     activeExtractCode.value = '' // 只有明确说要搜附近时，才清空码
     extractCode.value = ''
+
+    lastSearchKeyword.value = ''
+    lastSearchFileType.value = ''
     // 如果当前处于公开分享或取件码的列表视图，切换回附近文件模式
     if (isExtractListView.value) {
       isExtractListView.value = false
@@ -727,7 +760,6 @@ const handleSearch = async (mode = 'keep') => {
       ElMessage.info('正在搜索附近文件...')
     }
 
-
     const result = await locationService.getNearbyFiles(
       locationInfo.value.lat,
       locationInfo.value.lng,
@@ -742,8 +774,6 @@ const handleSearch = async (mode = 'keep') => {
       activeExtractCode.value,
     )
 
-    
-
     console.log('搜索结果:', result)
 
     // 检查返回的数据结构
@@ -757,10 +787,23 @@ const handleSearch = async (mode = 'keep') => {
 
       nearbyFiles.value = result.files
 
+      // 如果后端没有返回 total，则使用当前返回的数组长度作为兜底
+      let finalTotal = result.total !== undefined ? result.total : result.files.length
+
+      // 智能拦截：当用户选择了某种筛选条件（比如切换为"其他"），而我们恰好在第 1 页
+      // 后端返回的列表长度小于一页的大小（说明后续根本没数据了），但后端返回的总数却依然大过列表长度（说明后端 Count 没带上筛选条件漏洞）
+      if ((searchFileType.value || searchKeyword.value) && 
+          paginationInfo.value.pageNum === 1 && 
+          finalTotal > result.files.length && 
+          result.files.length < paginationInfo.value.pageSize) {
+        console.log(`检测到后端未适配"${searchFileType.value}"等条件的总数统计漏洞（原始总数：${finalTotal}），前端强制校准为真实筛选条数: ${result.files.length}`)
+        finalTotal = result.files.length
+      }
+
       // 更新分页信息
-      if (result.total !== undefined) {
-        paginationInfo.value.total = result.total
-        paginationInfo.value.totalPages = Math.ceil(result.total / paginationInfo.value.pageSize)
+      if (finalTotal !== undefined) {
+        paginationInfo.value.total = finalTotal
+        paginationInfo.value.totalPages = Math.ceil(finalTotal / paginationInfo.value.pageSize)
         paginationInfo.value.hasPrevious = paginationInfo.value.pageNum > 1
         paginationInfo.value.hasNext =
           paginationInfo.value.pageNum < paginationInfo.value.totalPages
@@ -770,10 +813,18 @@ const handleSearch = async (mode = 'keep') => {
         paginationInfo.value.hasPrevious = false
         paginationInfo.value.hasNext = false
       }
-      if(!isExtractListView.value){
-      const msg = activeExtractCode.value ? '已筛选私有文件列表' : `找到 ${result.count} 个附近文件`
-      ElMessage.success(msg)
-      }
+      if (!isExtractListView.value) {
+  // 🌟 核心修正：只有在明确是主动发起搜索、切换模式时（mode === 'public'）或者处于提取码初始化时，才弹出总数提示
+  // 翻页时（mode === 'keep'）保持静默，不触发 ElMessage 轰炸用户
+  if (mode === 'public' || paginationInfo.value.pageNum === 1) {
+    // 🌟 核心修正：msg 提示的总数应当是 finalTotal（也就是后端统计出的真实总文件数），而不是当前页的 files.length
+    const msg = activeExtractCode.value
+      ? `已成功提取私有文件，共 ${finalTotal} 个`
+      : `搜索成功，共找到附近的 ${finalTotal} 个文件`
+      
+    ElMessage.success(msg)
+  }
+}
     } else {
       console.warn('返回的数据结构不符合预期:', result)
       nearbyFiles.value = []
@@ -784,16 +835,15 @@ const handleSearch = async (mode = 'keep') => {
       ElMessage.warning('搜索完成，但没有找到文件')
     }
   } catch (error: any) {
-    
     // 捕获后端 throw 的 IllegalArgumentException 的 message
     const errorMsg = error.response?.data?.message || error.message || '搜索附近文件失败'
-    ElMessage.error(errorMsg) 
-    
-    nearbyFiles.value = [] 
+    ElMessage.error(errorMsg)
+
+    nearbyFiles.value = []
     paginationInfo.value.total = 0
 
     if (errorMsg.includes('过期') || errorMsg.includes('不存在')) {
-      activeExtractCode.value = '' 
+      activeExtractCode.value = ''
     }
   } finally {
     // 确保无论成功或失败都会关闭加载状态
@@ -805,7 +855,48 @@ const handleSearch = async (mode = 'keep') => {
 
 /** 取件码模式：根据全量列表与当前页做前端分页，写入 nearbyFiles */
 const applyExtractPage = () => {
-  const total = extractedFilesFull.value.length
+  // 1. 核心改动：在分页之前，先根据前端搜索框输入的 keyword 和 fileType 对全量数据进行过滤
+  let filteredList = [...extractedFilesFull.value]
+
+  // 按文件名模糊检索 (忽略大小写)
+  if (searchKeyword.value && searchKeyword.value.trim()) {
+    const keyword = searchKeyword.value.trim().toLowerCase()
+    filteredList = filteredList.filter(file => 
+      file.fileName && file.fileName.toLowerCase().includes(keyword)
+    )
+  }
+
+  // 按文件类型精确过滤
+  if (searchFileType.value) {
+    filteredList = filteredList.filter(file => {
+      if (!file.fileType) return false
+      
+      const rawType = file.fileType.toLowerCase().trim() // 后端返回的后缀名，如 png, mp4
+      let mappedType = '' // 前端大类标签
+
+      // 🌟 直接调用你写好的函数和 Set 进行归类
+      if (isImage(rawType)) {
+        mappedType = 'image'        // 匹配图片大类
+      } else if (isVideo(rawType)) {
+        mappedType = 'video'        // 匹配视频大类
+      } else if (isAudio(rawType)) {
+        mappedType = 'audio'        // 匹配音频大类
+      } else if (isDocOrText(rawType)) {
+        mappedType = 'text'         // 匹配文档/文本大类
+      } else if (ARCHIVE_EXTS.has(rawType)) {
+        mappedType = 'archive'      // 匹配压缩包大类
+      } else {
+        mappedType = 'other'        // 其他
+      }
+
+      // 比较映射后的大类是否和搜索框选中的 `searchFileType.value` 一致
+      // 兼容性兜底：如果搜索框本身选的就是具体后缀 'png'，也允许全等通过
+      return mappedType === searchFileType.value || rawType === searchFileType.value.toLowerCase()
+    })
+  }
+
+  //const total = extractedFilesFull.value.length
+  const total = filteredList.length
   paginationInfo.value.total = total
   const pageSize = paginationInfo.value.pageSize
   let pageNum = paginationInfo.value.pageNum
@@ -815,7 +906,8 @@ const applyExtractPage = () => {
     paginationInfo.value.pageNum = pageNum
   }
   const start = (pageNum - 1) * pageSize
-  nearbyFiles.value = extractedFilesFull.value.slice(start, start + pageSize)
+  //nearbyFiles.value = extractedFilesFull.value.slice(start, start + pageSize)
+  nearbyFiles.value = filteredList.slice(start, start + pageSize)
   paginationInfo.value.totalPages = maxPage
   paginationInfo.value.hasPrevious = pageNum > 1
   paginationInfo.value.hasNext = pageNum < maxPage
@@ -891,12 +983,11 @@ const getFileUploadToken = (fileId: number): string | undefined => {
   return myFiles[fileId]
 }
 
-
 // HomeView.vue 中新增一个清理取件码本地存储的辅助函数
 const syncPickupBatchesAfterDelete = (fileId: number, uploadToken: string) => {
   const PICKUP_BATCHES_STORAGE_KEY = 'geofile_private_pickup_batches' // 请确保这个 Key 与 UploadView 中一致
   const savedBatchesStr = localStorage.getItem(PICKUP_BATCHES_STORAGE_KEY)
-  
+
   if (!savedBatchesStr) return
 
   try {
@@ -932,10 +1023,10 @@ const syncAllLocalBatchesAfterDelete = (fileId: number, uploadToken: string) => 
   // 定义所有需要同步的 Key
   const STORAGE_KEYS = {
     PRIVATE: 'geofile_private_pickup_batches',
-    PUBLIC: 'geofile_public_upload_batches'
+    PUBLIC: 'geofile_public_upload_batches',
   }
 
-  Object.values(STORAGE_KEYS).forEach(key => {
+  Object.values(STORAGE_KEYS).forEach((key) => {
     const savedStr = localStorage.getItem(key)
     if (!savedStr) return
 
@@ -948,7 +1039,7 @@ const syncAllLocalBatchesAfterDelete = (fileId: number, uploadToken: string) => 
           // 如果该批次只有一个文件（即当前被删的文件），则直接移除整个批次
           if (!batch.files || batch.files.length <= 1) {
             changed = true
-            return false 
+            return false
           }
           // 否则，从文件列表中过滤掉该文件
           const originalLen = batch.files.length
@@ -1009,9 +1100,9 @@ const handleDeleteFile = async (file: NearbyFile) => {
       delete myFiles[file.id]
       localStorage.setItem('myUploadedFiles', JSON.stringify(myFiles))
 
-// 新增：同步清理取件码批次记录
-  // 传入当前删除的文件 ID 和它所属的 uploadToken
-  syncAllLocalBatchesAfterDelete(file.id, uploadToken)
+      // 新增：同步清理取件码批次记录
+      // 传入当前删除的文件 ID 和它所属的 uploadToken
+      syncAllLocalBatchesAfterDelete(file.id, uploadToken)
 
       // 从文件列表中移除（取件码视图：同步全量列表并仅刷新当前页，不触发附近公开搜索）
       if (isExtractListView.value) {
@@ -1050,7 +1141,6 @@ const handleDeleteFile = async (file: NearbyFile) => {
   }
 }
 
-
 // 查看文件详情
 const viewFileDetail = async (file: NearbyFile) => {
   console.log('当前点击的文件详情数据:', file)
@@ -1062,17 +1152,21 @@ const viewFileDetail = async (file: NearbyFile) => {
 
   try {
     // 2. 立即请求后端获取最新状态
-    const response = await fetch(`/api/file/detail/${file.id}`)
+    const response = await fetch(`/api/file/detail/${file.id}${getPosParams()}`)
     const resData = await response.json()
-    
+
     if (resData.code === 200) {
       // 3. 用后端最新数据覆盖旧数据
       selectedFile.value = resData.data
-      
+
       // 4. 同步更新列表中的那一行，保证背景列表也是准的
-      const index = nearbyFiles.value.findIndex(f => f.id === file.id)
+      const index = nearbyFiles.value.findIndex((f) => f.id === file.id)
       if (index !== -1) {
         nearbyFiles.value[index] = resData.data
+      }
+      // 如果发现超距了，顺便给个气泡提示
+      if (resData.data.distanceExceeded) {
+        ElMessage.error('检测到您当前距离此文件过远（已超1km），该文件将无法下载')
       }
       console.log('详情已同步最新下载次数:', resData.data.downloadCount)
     }
@@ -1083,32 +1177,47 @@ const viewFileDetail = async (file: NearbyFile) => {
 
 // 快速下载逻辑
 const handleQuickDownload = (file: any) => {
-  if (isBtnDisabled(file)) {
-    ElMessage.error('文件已失效或达到下载上限');
-    return;
+  if (file.distanceExceeded) {
+    ElMessage.error('由于距离超过1km，无法进行快速下载')
+    return
   }
 
-  selectedFile.value = file; // 必须先给 selectedFile 赋值，因为 downloadFile 依赖它
+  if (isBtnDisabled(file)) {
+    ElMessage.error('文件已失效或达到下载上限')
+    return
+  }
+
+  selectedFile.value = file // 必须先给 selectedFile 赋值，因为 downloadFile 依赖它
   nextTick(() => {
-    downloadFile(); // 直接调用你代码中已有的 downloadFile 方法
-  });
-};
+    downloadFile() // 直接调用你代码中已有的 downloadFile 方法
+  })
+}
 
 // 统一判定函数，确保列表按钮和详情按钮逻辑一致
 const isBtnDisabled = (file: any) => {
   // 1. 判断后端状态拦截 (status=0已删, status=2过期)
-  if (file.status === 0 || file.status === 2) return true;
+  if (file.status === 0 || file.status === 2) return true
+
+  // 新增：判断是否超出 1km 距离限制
+  if (file.distanceExceeded) return true
 
   // 2. 判断下载次数是否达到上限
   // 对应源码中的 isMaxedOut 逻辑
-  const isMaxedOutLocal = file.maxDownloads > 0 && (file.downloadCount || 0) >= file.maxDownloads;
-  
+  const isMaxedOutLocal = file.maxDownloads > 0 && (file.downloadCount || 0) >= file.maxDownloads
+
   // 3. 判断是否实时过期
   // 对应源码中的 isFileExpiredRealtime 逻辑
-  const isExpiredLocal = file.expireTime && new Date(file.expireTime) < new Date();
+  const isExpiredLocal = file.expireTime && new Date(file.expireTime) < new Date()
 
-  return isMaxedOutLocal || isExpiredLocal;
-};
+  return isMaxedOutLocal || isExpiredLocal
+}
+
+// 辅助函数：拼接当前位置参数
+const getPosParams = () => {
+  const lat = locationInfo.value?.lat
+  const lng = locationInfo.value?.lng
+  return lat && lng ? `?lat=${lat}&lng=${lng}` : ''
+}
 
 // 下载文件
 const downloadFile = async () => {
@@ -1120,13 +1229,22 @@ const downloadFile = async () => {
 
   // --- 新增：下载前最后一次同步校验 ---
   try {
-    const syncRes = await fetch(`/api/file/detail/${selectedFile.value.id}`)
+    const syncRes = await fetch(`/api/file/detail/${selectedFile.value.id}${getPosParams()}`)
     const syncData = await syncRes.json()
     if (syncData.code === 200) {
       selectedFile.value = syncData.data
+
+      // 拦截超距
+      if (selectedFile.value.distanceExceeded) {
+        ElMessage.error('当前距离已超出1km限制，已被服务器拒绝下载')
+        return
+      }
+
       // 如果同步后发现已经满了，直接拦截，不走下载流
-      if (selectedFile.value.maxDownloads > 0 && 
-          selectedFile.value.downloadCount >= selectedFile.value.maxDownloads) {
+      if (
+        selectedFile.value.maxDownloads > 0 &&
+        selectedFile.value.downloadCount >= selectedFile.value.maxDownloads
+      ) {
         ElMessage.error('该文件刚刚已达到下载次数上限')
         return
       }
@@ -1147,8 +1265,30 @@ const downloadFile = async () => {
   try {
     ElMessage.success('开始下载文件...')
 
+    // ==================== ✨ 修复核心：安全拼接参数，杜绝多问号和丢 Token Bug ====================
+    // 1. 提取基础参数
+    const fileId = selectedFile.value.id
+    const token = selectedFile.value.downloadToken
+
+    // 2. 使用原生的 URLSearchParams 动态组装参数，这样绝对不会漏掉或错乱
+    const params = new URLSearchParams()
+    params.append('token', token)
+
+    // 3. 如果能获取到位置参数，安全地追加进去
+    if (typeof getPosParams === 'function') {
+      // 解析你 getPosParams() 返回的内容，防止它内部带了 '?' 导致冲突
+      const posStr = getPosParams().replace('?', '') // 把可能存在的问号去掉
+      if (posStr) {
+        const posParams = new URLSearchParams(posStr)
+        if (posParams.has('lat')) params.append('lat', posParams.get('lat')!)
+        if (posParams.has('lng')) params.append('lng', posParams.get('lng')!)
+      }
+    }
+
+    console.log('实际请求的下载 URL 完整参数为:', params.toString())
+
     // 3. 使用 fetch 获取文件，这样可以捕获错误
-    const response = await fetch(`/api/file/download/${selectedFile.value.id}?token=${token}`)
+    const response = await fetch(`/api/file/download/${fileId}?${params.toString()}`)
 
     if (!response.ok) {
       // 处理 HTTP 错误状态码
@@ -1182,11 +1322,11 @@ const downloadFile = async () => {
     ElMessage.success('下载成功')
 
     // 不要手动 += 1，而是直接请求后端拿最权威的数据
-const finalRes = await fetch(`/api/file/detail/${selectedFile.value.id}`)
-const finalData = await finalRes.json()
-if (finalData.code === 200) {
-  selectedFile.value = finalData.data
-}
+    const finalRes = await fetch(`/api/file/detail/${selectedFile.value.id}`)
+    const finalData = await finalRes.json()
+    if (finalData.code === 200) {
+      selectedFile.value = finalData.data
+    }
 
     // 7. 下载成功后重新获取文件列表，更新下载次数
     //await handleSearch()
@@ -1229,9 +1369,50 @@ if (finalData.code === 200) {
 const copyFileLink = () => {
   if (!selectedFile.value) return
 
-  const url =
+  /*const url =
     window.location.origin +
-    `/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+    `/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`*/
+
+  let url = ''
+
+  // 🌟 核心分流决策树：
+  // 1. 如果文件是公开文件 (isPrivate === 0)
+  // 2. 并且它绑定了物理经纬度 (说明它受到 1km 地理围栏圈保护)
+  /*if (selectedFile.value.isPrivate === 0 && selectedFile.value.locationLat != null) {
+    // 【分流 A】：复制指向前端中转验证页面的链接，带上 Query 参数
+    url = `${window.location.origin}/download-redirect?fileId=${selectedFile.value.id}&token=${selectedFile.value.downloadToken}`
+  } else {
+    // 【分流 B】：如果是私有加密文件或无位置普通文件，直接提供后端的直连盲抓流链接
+    url = `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  }*/
+
+  // 1. 公开文件判定
+  const isPublic = !currentFileIsPrivate.value
+
+  // 2. ✨ 全字段兼容性防御
+  // 看看后端到底是返回的 locationLat、locationLng 还是小写的 lat、lng 或者是字符形式
+  const fileObj = selectedFile.value as any
+
+  // 打印完整的对象结构，让你在控制台一眼看到地理位置字段叫什么名字！
+  console.log('【Debug 核心文件对象实体】:', fileObj)
+
+  const hasLocation =
+    (fileObj.locationLat !== null &&
+      fileObj.locationLat !== undefined &&
+      fileObj.locationLat !== '') ||
+    (fileObj.lat !== null && fileObj.lat !== undefined && fileObj.lat !== '') ||
+    (fileObj.latitude !== null && fileObj.latitude !== undefined && fileObj.latitude !== '')
+
+  console.log('【Debug 分流决策修正版】', { isPublic, hasLocation })
+
+  // 🌟 核心分流决策树
+  if (isPublic && hasLocation) {
+    // 【分流 A】：如果是公开且有位置的文件 ➡️ 走前端中转验证页面
+    url = `${window.location.origin}/download-redirect?fileId=${selectedFile.value.id}&token=${selectedFile.value.downloadToken}`
+  } else {
+    // 【分流 B】：如果是私密文件或普通无位置文件 ➡️ 直接提供后端的直连盲抓流链接
+    url = `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
+  }
 
   navigator.clipboard
     .writeText(url)
@@ -1325,7 +1506,6 @@ const formatDistance = (meters: number): string => {
   if (meters < 1000) return meters + 'm'
   return (meters / 1000).toFixed(2) + 'km'
 }
-
 
 // 1. 判断是否过期 (增加严格的 null/undefined 检查和格式兼容)
 const isExpired = () => {
@@ -1482,9 +1662,9 @@ onUnmounted(() => {
 onMounted(() => {
   console.log('首页初始化...')
 
-  const path = window.location.hash || window.location.pathname;
-  const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
-  const isSharing = path.includes('/s/') || path.includes('/b/') || urlParams.has('uploadToken');
+  const path = window.location.hash || window.location.pathname
+  const urlParams = new URLSearchParams(window.location.hash.split('?')[1])
+  const isSharing = path.includes('/s/') || path.includes('/b/') || urlParams.has('uploadToken')
 
   // 对账清理 myUploadedFiles，避免后端定时下架后本地仍残留上传令牌
   void reconcileMyUploadedFiles()
@@ -1500,13 +1680,12 @@ onMounted(() => {
 
       // 如果有位置信息，自动搜索附近文件
       if (locationData.lat && locationData.lng) {
-        if(isSharing)
-        {
-          console.log('检测到分享链接，跳过常规附近搜索');
-          return; // 直接结束，不弹提示，也不执行搜索
+        if (isSharing) {
+          console.log('检测到分享链接，跳过常规附近搜索')
+          return // 直接结束，不弹提示，也不执行搜索
         }
         ElMessage.info('已从缓存读取位置信息，开始搜索附近文件...')
-        
+
         handleSearch()
       } else {
         console.warn('位置信息不完整:', locationData)
@@ -1529,7 +1708,7 @@ const extractLoading = ref(false)
 // 封装提取逻辑
 const checkAndExtract = () => {
   // 新增：如果当前不在首页或分享路径，不执行提取逻辑
-  if (route.path !== '/' && !route.path.startsWith('/s/')&& !route.path.startsWith('/b/')) {
+  if (route.path !== '/' && !route.path.startsWith('/s/') && !route.path.startsWith('/b/')) {
     return
   }
 
@@ -1569,11 +1748,10 @@ const checkAndExtract = () => {
     setTimeout(() => {
       handleExtractByCode()
     }, 500)
-  }
-  else if(tokenFromUrl) {
+  } else if (tokenFromUrl) {
     // 公开分享不需要填充输入框，直接调用根据 Token 加载的逻辑
     setTimeout(() => {
-      handleLoadPublicBatchByToken(tokenFromUrl) 
+      handleLoadPublicBatchByToken(tokenFromUrl)
     }, 500)
   }
 }
@@ -1606,7 +1784,6 @@ const handleExtractByCode = async () => {
 
   extractLoading.value = true
   try {
-    
     // 这意味着后续的所有搜索（包括分页和筛选）都会带上这个码
     activeExtractCode.value = code
 
@@ -1633,7 +1810,7 @@ const handleExtractByCode = async () => {
  * 通过公开分享令牌加载文件批次
  * 逻辑：直接调用后端 list-by-token 接口，并进入列表展示模式
  */
- const handleLoadPublicBatchByToken = async (token: string) => {
+const handleLoadPublicBatchByToken = async (token: string) => {
   if (!token) return
 
   isCompLoading.value = true // 全局加载状态
@@ -1641,7 +1818,7 @@ const handleExtractByCode = async () => {
     // 1. 设置状态：进入“提取列表视图”模式
     // 这样界面会自动切换到表格展示，而不是地图/卡片流
     //isExtractListView.value = true
-    
+
     // 2. 清空之前的取件码状态，确保不冲突
     activeExtractCode.value = ''
     extractCode.value = ''
@@ -1658,23 +1835,26 @@ const handleExtractByCode = async () => {
     if (json.code === 200 && Array.isArray(json.data) && json.data.length > 0) {
       // 只有真正拿到文件了，才切换到提取列表视图
       isExtractListView.value = true
-      
+
       // 5. 填充全量列表并进行前端分页处理
       // 这里复用你系统中处理“提取结果”的逻辑
       extractedFilesFull.value = json.data
       paginationInfo.value.total = json.data.length
-      
+
       // 调用你的分页切片函数
       applyExtractPage()
-      
+
       ElMessage.success('已加载分享的公开文件')
     } else {
       //ElMessage.error(json.message || '分享链接已失效')
       //isExtractListView.value = false // 失败则退出列表模式
       // 修改点：如果 code 不对，或者数组是空的，都视为失效
-      const errorMsg = json.data?.length === 0 ? '该分享批次不包含任何文件或已失效' : (json.message || '分享链接已失效')
+      const errorMsg =
+        json.data?.length === 0
+          ? '该分享批次不包含任何文件或已失效'
+          : json.message || '分享链接已失效'
       ElMessage.error(errorMsg)
-      
+
       // 关键：强制设为常规模式并触发定位/搜索
       exitExtractModeAndSearch()
     }
@@ -1892,7 +2072,7 @@ const currentFileIsPrivate = computed(() => {
 
 .page-header {
   text-align: center;
-  margin-bottom: 20px;
+  margin: 8px 0 12px 0;
 
   h1 {
     font-size: 36px;
@@ -1905,16 +2085,17 @@ const currentFileIsPrivate = computed(() => {
     font-size: 16px;
     color: #909399;
     margin: 0;
+    letter-spacing: 0.5px;
   }
 }
 
 .mode-switch {
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 .location-card,
 .files-card {
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 
   .card-header {
     display: flex;
@@ -1958,8 +2139,8 @@ const currentFileIsPrivate = computed(() => {
 @media (max-width: 768px) {
   .file-actions {
     flex-direction: column;
-    align-items: stretch;   /* 按钮宽度撑满 */
-    width: 100px;           /* 给定固定宽度防止挤压 */
+    align-items: stretch; /* 按钮宽度撑满 */
+    width: 100px; /* 给定固定宽度防止挤压 */
   }
   .file-actions .el-button {
     margin-left: 0 !important; /* 强制清除 Element Plus 按钮默认的左边距 */
@@ -2004,7 +2185,7 @@ const currentFileIsPrivate = computed(() => {
 }
 
 .search-card {
-  margin-top: 20px;
+  margin-top: 10px;
 }
 
 .search-params {
@@ -2106,9 +2287,9 @@ const currentFileIsPrivate = computed(() => {
   .file-actions {
     flex-shrink: 0;
     display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: flex-end;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
     flex-wrap: nowrap;
   }
 }

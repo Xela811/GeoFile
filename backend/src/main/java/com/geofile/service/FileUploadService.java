@@ -73,7 +73,7 @@ public interface FileUploadService {
      * @param downloadToken 下载令牌
      * @return 文件信息
      */
-    File downloadFile(Long fileId, String downloadToken);
+    File downloadFile(Long fileId, String downloadToken, Double lat, Double lng);
 
     /**
      * 生成下载令牌

@@ -4,11 +4,14 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.geofile.common.Result;
 import com.geofile.entity.File;
 import com.geofile.service.FileHashService;
+import com.geofile.service.FileLogService;
 import com.geofile.service.FileService;
+import com.geofile.util.IpUtils;
 import com.geofile.util.RedisUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -40,6 +43,9 @@ public class FileDeleteController {
     private FileHashService fileHashService;
 
     @Autowired
+    private FileLogService fileLogService;
+
+    @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
     /**
@@ -53,8 +59,9 @@ public class FileDeleteController {
     @Operation(summary = "删除文件", description = "通过上传令牌验证身份后删除文件")
     public Result<String> deleteFile(
             @Parameter(description = "文件ID", example = "1") @PathVariable Long fileId,
-            @Parameter(description = "上传令牌", required = true) @RequestParam String uploadToken) {
-
+            @Parameter(description = "上传令牌", required = true) @RequestParam String uploadToken,
+            HttpServletRequest request) {
+        String clientIp = IpUtils.getClientIp(request);
         try {
             log.info("请求删除文件: fileId={}, uploadToken={}", fileId, uploadToken);
 
@@ -62,17 +69,20 @@ public class FileDeleteController {
             File file = fileService.getById(fileId);
             if (file == null) {
                 log.warn("文件不存在: fileId={}", fileId);
+                fileLogService.recordLog(fileId, "DELETE", 0, "删除失败：文件不存在", null, null, clientIp);
                 return Result.error("文件不存在");
             }
 
             // 2. 验证上传令牌
             if (file.getUploadToken() == null || !file.getUploadToken().equals(uploadToken)) {
                 log.warn("上传令牌验证失败: fileId={}, token={}", fileId, uploadToken);
+                fileLogService.recordLog(fileId, "DELETE", 0, "删除失败：无权限删除此文件，上传令牌无效", null, null, clientIp);
                 return Result.error("无权限删除此文件，上传令牌无效");
             }
 
             // 3. 检查文件是否已被删除
             if (file.getStatus() != null && file.getStatus() == 0 && file.getDeleted() == 1) {
+                fileLogService.recordLog(fileId, "DELETE", 0, "删除失败：文件此前已被删除", null, null, clientIp);
                 return Result.error("文件已被删除");
             }
 
@@ -124,10 +134,12 @@ public class FileDeleteController {
             // ===========================================
 
             log.info("文件删除成功: fileId={}", fileId);
+            fileLogService.recordLog(fileId, "DELETE", 1, "文件删除成功", null, null, clientIp);
             return Result.success("文件删除成功");
 
         } catch (Exception e) {
             log.error("删除文件失败: fileId={}", fileId, e);
+            fileLogService.recordLog(fileId, "DELETE", 0, "删除异常: " + e.getMessage(), null, null, clientIp);
             return Result.error("删除文件失败: " + e.getMessage());
         }
     }
@@ -166,11 +178,13 @@ public class FileDeleteController {
     @DeleteMapping("/batch-by-upload-token")
     @Operation(summary = "按批次删除文件", description = "使用批量上传返回的 uploadToken，删除该令牌下全部未删文件，并失效取件码绑定")
     public Result<Map<String, Object>> deleteBatchByUploadToken(
-            @Parameter(description = "批量上传返回的上传令牌", required = true) @RequestParam String uploadToken) {
+            @Parameter(description = "批量上传返回的上传令牌", required = true) @RequestParam String uploadToken,
+            HttpServletRequest request) {
         if (uploadToken == null || uploadToken.isBlank()) {
             return Result.error("uploadToken 不能为空");
         }
         String token = uploadToken.trim();
+        String clientIp = IpUtils.getClientIp(request);
         try {
             List<File> files = fileService.list(new LambdaQueryWrapper<File>()
                     .eq(File::getUploadToken, token)
@@ -183,6 +197,7 @@ public class FileDeleteController {
                     redisUtil.del("code:to:token:" + codeObj.toString());
                 }
                 redisUtil.del(redisKey);
+                fileLogService.recordLog(null, "BATCH_DELETE", 0, "批次删除失败：未找到该批次文件或已全部删除", null, null, clientIp);
                 return Result.error("未找到该批次文件或已全部删除");
             }
 
@@ -198,6 +213,7 @@ public class FileDeleteController {
                 f.setStatus(0);
                 f.setDeleted(1);
                 fileService.updateById(f);
+                fileLogService.recordLog(f.getId(), "BATCH_DELETE", 1, "批次内文件随整批删除成功", null, null, clientIp);
             }
             if(isPrivate) {
                 String redisDownloadKey = "file:download:" + token;
@@ -219,6 +235,7 @@ public class FileDeleteController {
             return Result.success(data);
         } catch (Exception e) {
             log.error("批次删除失败: uploadToken={}", token, e);
+            fileLogService.recordLog(null, "BATCH_DELETE", 0, "批次删除崩溃: " + e.getMessage(), null, null, clientIp);
             return Result.error("批次删除失败: " + e.getMessage());
         }
     }

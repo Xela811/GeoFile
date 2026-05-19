@@ -28,11 +28,11 @@
       ref="uploadRef"
       title="上传文件"
       :multiple="true"
-      :limit="10"
+      :limit="50"
       :max-downloads="downloadLimitConfig.maxDownloads"
       :valid-minutes="downloadLimitConfig.validMinutes"
       :need-code="downloadLimitConfig.needCode"
-      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 5GB"
+      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 5GB，单次上传文件数量上限50"
       @success="handleUploadSuccess"
       @upload-success="handleFileUploadSuccess"
       @error="handleUploadError"
@@ -57,7 +57,7 @@
     </FileUpload>
 
     <!-- 私有批次：取件码与文件（本地持久化，可刷新 / 删单文件 / 删整批） -->
-    <el-card v-if="pickupBatches.length > 0" class="pickup-batches-card" shadow="never">
+    <!--<el-card v-if="pickupBatches.length > 0" class="pickup-batches-card" shadow="never">
       <template #header>
         <div class="pickup-batches-header">
           <span>我的取件码（本机记录）</span>
@@ -237,7 +237,248 @@
       </el-table-column>
     </el-table>
   </div>
-</el-card>
+</el-card>-->
+
+    
+<el-card v-if="pickupBatches.length > 0" class="pickup-batches-card" shadow="never">
+      <template #header>
+        <div class="pickup-batches-header">
+          <span>我的取件码（本机记录）</span>
+          <el-button type="primary" link :icon="Refresh" @click="refreshAllPickupBatches">
+            全部刷新
+          </el-button>
+        </div>
+      </template>
+      <p class="pickup-batches-hint">
+        仅当您在本浏览器以「私有」模式上传时记录。删除部分文件后点「刷新」可同步列表；「删除整批」将移除该记录下全部文件并失效取件码。
+      </p>
+      
+      <el-collapse class="custom-batch-collapse">
+        <el-collapse-item 
+          v-for="batch in pickupBatches" 
+          :key="batch.code" 
+          :name="batch.code"
+          class="pickup-batch-block"
+        >
+          <template #title>
+            <div class="pickup-batch-header-trigger" @click.stop>
+              <el-icon class="batch-folder-icon"><FolderOpened /></el-icon>
+              
+              <div class="pickup-code-row">
+                <span class="label">取件码</span>
+                <el-tag type="warning" size="large" effect="dark">{{ batch.code }}</el-tag>
+                <el-button type="primary" link :icon="DocumentCopy" @click.stop="copyPickupCode(batch.code)">
+                  复制
+                </el-button>
+                <el-button
+                  type="primary"
+                  link
+                  :icon="Share"
+                  @click.stop="openShare(batch.code)"
+                >
+                  分享
+                </el-button>
+              </div>
+
+              <div class="mobile-first-file-info">
+                <span class="first-file-name" v-if="batch.files && batch.files.length > 0">
+                  {{ batch.files[0].fileName }}
+                </span>
+                <el-tag size="small" type="info" class="file-count-tag" v-if="batch.files">
+                  等共 {{ batch.files.length }} 个文件
+                </el-tag>
+              </div>
+
+              <div class="pickup-meta">
+                <span v-if="batch.validMinutes > 0" class="meta-item">
+                  约 {{ formatBatchExpire(batch) }} 失效
+                </span>
+                <span v-else class="meta-item">未限制时长</span>
+              </div>
+            </div>
+          </template>
+
+          <div class="pickup-batch-content-body">
+            <div class="pickup-batch-toolbar">
+              <div class="pickup-meta" style="margin-top: 4px;">
+                <span v-if="batch.lastSyncedAt" class="meta-item subtle">
+                  最近同步：{{ formatSyncedAt(batch.lastSyncedAt) }}
+                </span>
+              </div>
+              <div class="pickup-actions">
+                <el-button
+                  size="small"
+                  :icon="Refresh"
+                  :loading="batch.refreshing"
+                  @click="refreshPickupBatch(batch)"
+                >
+                  刷新列表
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :icon="Delete"
+                  @click="confirmDeleteEntireBatch(batch)"
+                >
+                  删除整批
+                </el-button>
+              </div>
+            </div>
+            
+            <el-alert v-if="batch.syncError" type="error" :closable="false" class="batch-alert">
+              {{ batch.syncError }}
+            </el-alert>
+            
+            <el-table
+              v-if="batch.files.length > 0"
+              :key="`${batch.code}-${batch.files.length}`"
+              :data="batch.files"
+              size="small"
+              stripe
+              class="pickup-file-table"
+            >
+              <el-table-column prop="fileName" label="文件名" min-width="120" show-overflow-tooltip />
+              <el-table-column label="大小" width="80">
+                <template #default="{ row }">
+                  {{ formatFileSize(row.fileSize) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="uploadTime" label="上传时间" width="170" class-name="mobile-hide" label-class-name="mobile-hide" />
+              <el-table-column label="操作" width="60" align="right">
+                <template #default="{ row }">
+                  <el-button
+                    type="danger"
+                    link
+                    size="small"
+                    
+                    @click="deleteSingleInBatch(batch, row.id)"
+                  >
+                    删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无文件或正在加载" :image-size="64" />
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+    </el-card>
+
+    <el-card v-if="publicBatches.length > 0" class="pickup-batches-card public-batches-card" shadow="never">
+      <template #header>
+        <div class="pickup-batches-header">
+          <span style="color: #67c23a; font-weight: bold;">
+            <el-icon style="vertical-align: middle; margin-right: 4px;"><Share /></el-icon>
+            我的公开分享（附近1km可见）
+          </span>
+        </div>
+      </template>
+      <p class="pickup-batches-hint">
+        仅记录您在本浏览器上传的「公开」文件。这些文件在GeoFile首页上对1km内所有人可见。
+        删除整批将使该批次文件彻底移除。
+      </p>
+
+      <el-collapse class="custom-batch-collapse public-collapse">
+        <el-collapse-item 
+          v-for="batch in publicBatches" 
+          :key="batch.uploadToken" 
+          :name="batch.uploadToken"
+          class="pickup-batch-block"
+        >
+          <template #title>
+            <div class="pickup-batch-header-trigger" @click.stop>
+              <el-icon class="batch-folder-icon" style="color: #67c23a;"><FolderOpened /></el-icon>
+              
+              <div class="pickup-code-row">
+                <span class="label">区域公开文件</span>
+                
+                <el-button
+                  type="primary"
+                  link
+                  :icon="Share"
+                  @click.stop="openPublicShare(batch.uploadToken)"
+                >
+                  分享
+                </el-button>
+              </div>
+
+              <div class="mobile-first-file-info">
+                <span class="first-file-name" v-if="batch.files && batch.files.length > 0">
+                  {{ batch.files[0].fileName }}
+                </span>
+                <el-tag size="small" type="info" class="file-count-tag" v-if="batch.files">
+                  等共 {{ batch.files.length }} 个文件
+                </el-tag>
+              </div>
+
+              <div class="pickup-meta">
+                <!--<span class="meta-item">
+                  {{ formatSyncedAt(batch.createdAt) }}
+                </span>-->
+                <span v-if="batch.validMinutes > 0" class="meta-item">
+                  约 {{ formatBatchExpire(batch) }} 失效
+                </span>
+                <span v-else class="meta-item">未限制时长</span>
+              </div>
+            </div>
+          </template>
+
+          <div class="pickup-batch-content-body">
+            <div class="pickup-batch-toolbar">
+              <div class="pickup-meta" style="margin-top: 4px;">
+                <span v-if="batch.lastSyncedAt" class="meta-item subtle">
+                  最近操作：{{ formatSyncedAt(batch.lastSyncedAt) }}
+                </span>
+              </div>
+
+              <div class="pickup-actions">
+                <el-button
+                  size="small"
+                  :icon="Refresh"
+                  :loading="batch.refreshing"
+                  @click="refreshPublicBatch(batch)"
+                >
+                  刷新列表
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :icon="Delete"
+                  @click="confirmDeleteEntirePublicBatch(batch)"
+                >
+                  删除整批文件并下架
+                </el-button>
+              </div>
+            </div>
+
+            <el-table :data="batch.files" size="small" stripe class="pickup-file-table">
+              <el-table-column prop="fileName" label="文件名" min-width="120" show-overflow-tooltip />
+              <el-table-column label="大小" width="80">
+                <template #default="{ row }">
+                  {{ formatFileSize(row.fileSize) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="uploadTime" label="上传时间" width="170" class-name="mobile-hide" label-class-name="mobile-hide" />
+              <el-table-column label="操作" width="60" align="right">
+                <template #default="{ row }">
+                  <el-button
+                    type="danger"
+                    link
+                    size="small"
+                    
+                    @click="deleteSingleInPublicBatch(batch, row.id)"
+                  >
+                    删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+    </el-card>
 
     <!-- 下载限制配置对话框 -->
     <el-dialog
@@ -320,7 +561,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Back, SuccessFilled, Refresh, DocumentCopy, Delete } from '@element-plus/icons-vue'
+import { Back, SuccessFilled, Refresh, DocumentCopy, Delete, FolderOpened } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import FileUpload from '@/components/FileUpload.vue'
 import { reconcileMyUploadedFiles } from '@/services/reconcileService'
@@ -490,7 +731,7 @@ const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; messa
     }
   })
   if (saved > 0) {
-    ElMessage.success('文件上传成功并已保存操作令牌')
+    //ElMessage.success('文件上传成功并已保存操作令牌')
   } else {
     console.warn('上传文件数据不完整:', payload)
   }
@@ -923,7 +1164,7 @@ async function confirmDeleteEntireBatch(batch: PickupBatchDisplay) {
 // 公开批次的单文件删除
 async function deleteSingleInPublicBatch(batch: PickupBatchDisplay, fileId: number) {
   try {
-    await ElMessageBox.confirm('确定删除该公开文件？删除后地图上将不再显示。', '提示', { type: 'warning' })
+    await ElMessageBox.confirm('确定删除该公开文件？删除后将不再显示在附近公开文件列表中。', '提示', { type: 'warning' })
     const res = await fetch(`/api/file/delete/${fileId}?uploadToken=${encodeURIComponent(batch.uploadToken)}`, { method: 'DELETE' })
     const json = await res.json()
     if (json.code === 200) {
@@ -1111,6 +1352,10 @@ const handleUploadError = (error: Error) => {
   margin-top: 20px;
   border-left: 4px solid #67c23a; // 绿色左边框表示公开
   background-color: #f0f9eb; // 浅绿色背景
+
+  :deep(.el-collapse-item__header) {
+    background-color: #f0f9eb !important;
+  }
 }
 
 .pickup-batches-header {
@@ -1126,18 +1371,85 @@ const handleUploadError = (error: Error) => {
   line-height: 1.5;
 }
 
+// 🌟【新增】清除 Element 默认边框，使其融入你的原生块设计
+.custom-batch-collapse {
+  border-top: none !important;
+  border-bottom: none !important;
+  background: transparent !important;
+
+  :deep(.el-collapse-item__header) {
+    border-bottom: none !important;
+    height: auto !important;
+    line-height: inherit !important;
+    padding: 12px 0;
+    cursor: pointer;
+  }
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none !important;
+    background-color: transparent !important;
+  }
+  :deep(.el-collapse-item__content) {
+    padding-bottom: 8px;
+  }
+}
+
+// 🌟【新增】专门处理一长行折叠头的 Flex 布局控制
+.pickup-batch-header-trigger {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  padding-right: 8px;
+  overflow: hidden;
+}
+
+// 🌟【新增】小图标美化
+.batch-folder-icon {
+  font-size: 16px;
+  color: #e6a23c;
+  flex-shrink: 0;
+}
+
+// 🌟【新增】移动端/折叠状态下第一个文件名显示的裁切规范
+.mobile-first-file-info {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px; 
+  gap: 6px;
+
+  .first-file-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #303133;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-count-tag {
+    flex-shrink: 0;
+  }
+}
+
 .pickup-batch-block {
-  padding: 16px 0;
+  //padding: 16px 0;
   border-bottom: 1px solid #ebeef5;
 
   &:last-child {
     border-bottom: none;
-    padding-bottom: 0;
+    //padding-bottom: 0;
   }
 }
 
 .pickup-batch-toolbar {
   margin-bottom: 12px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .pickup-code-row {
@@ -1145,7 +1457,7 @@ const handleUploadError = (error: Error) => {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 8px;
+  //margin-bottom: 8px;
 
   .label {
     font-weight: 500;
@@ -1179,4 +1491,37 @@ const handleUploadError = (error: Error) => {
 .pickup-file-table {
   width: 100%;
 }
+
+// 🌟【新增】手机响应式断点适配：大幅节省屏幕垂直与水平空间
+@media (max-width: 768px) {
+  .pickup-batch-content-body {
+    padding: 4px 4px 12px 4px; // 手机端让出左边距
+  }
+  
+  .mobile-first-file-info {
+    max-width: 180px; // 手机端屏幕窄，进一步限制首个文件名的宽度防止挤爆
+  }
+  
+  .pickup-meta {
+    font-size: 11px; // 元数据缩小
+  }
+  
+  // 配合上方 el-table-column，在手机端强制隐藏“上传时间”这一列
+  :deep(.mobile-hide) {
+    display: none !important;
+  }
+
+  .pickup-file-table {
+    :deep(.is-right) {
+      text-align: left !important; // 强行靠左，紧贴前面的“大小”列
+      
+      .cell {
+        text-align: left !important; // 确保内部的容器也靠左对齐
+        padding-left: 4px !important; // 稍微给 4px 的左内边距，防止跟大小的数字粘在一起
+      }
+    }
+  }
+}
+
+
 </style>
