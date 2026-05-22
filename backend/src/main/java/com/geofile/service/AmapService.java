@@ -89,45 +89,6 @@ public interface AmapService {
      */
     AddressSuggestion[] autoComplete(String key, String keyWord);
 
-    /**
-     * 获取周边的地铁站点
-     *
-     * 说明：
-     * 搜索指定位置周边的地铁站
-     *
-     * @param key 高德地图 API Key
-     * @param location 中心点经纬度
-     * @param radius 搜索半径
-     * @return 地铁站列表
-     */
-    POIResult[] searchSubwayStations(String key, String location, Integer radius);
-
-    /**
-     * 获取周边的医院
-     *
-     * 说明：
-     * 搜索指定位置周边的医院
-     *
-     * @param key 高德地图 API Key
-     * @param location 中心点经纬度
-     * @param radius 搜索半径
-     * @return 医院列表
-     */
-    POIResult[] searchHospitals(String key, String location, Integer radius);
-
-    /**
-     * 获取周边的餐厅
-     *
-     * 说明：
-     * 搜索指定位置周边的餐厅
-     *
-     * @param key 高德地图 API Key
-     * @param location 中心点经纬度
-     * @param radius 搜索半径
-     * @return 餐厅列表
-     */
-    POIResult[] searchRestaurants(String key, String location, Integer radius);
-
     // ========== 内部数据模型 ==========
 
     /**

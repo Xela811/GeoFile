@@ -109,43 +109,4 @@ public class FileNearbyController {
             return Result.success(result);
 
     }
-
-    /**
-     * 获取所有文件列表（用于测试）
-     */
-    @GetMapping("/list")
-    @Operation(summary = "获取文件列表", description = "获取所有文件列表（用于测试和对比）")
-    public Result<List<FileVO>> getFileList() {
-        try {
-            // 这里使用默认参数搜索附近文件
-            List<FileVO> files = fileService.searchNearbyFiles(39.9042, 116.4074, 5000, null, 1, 100, "upload_time", "DESC", null, null, null);
-            return Result.success(files);
-        } catch (Exception e) {
-            log.error("获取文件列表失败", e);
-            return Result.error("获取文件列表失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 通过文件ID获取文件详情
-     */
-    @GetMapping("/{id}")
-    @Operation(summary = "获取文件详情", description = "根据文件ID获取文件详情")
-    public Result<FileVO> getFileDetail(
-            @Parameter(description = "文件ID", example = "1") @PathVariable Long id) {
-        try {
-            // 注意：FileServiceImpl 中的 getById 可能需要实现
-            // 这里先用一个临时的返回
-            FileVO fileVO = new FileVO();
-            fileVO.setId(id);
-            fileVO.setFileName("测试文件");
-            fileVO.setFileSize(1024L);
-            fileVO.setUploadTime(java.time.LocalDateTime.now().toString());
-
-            return Result.success(fileVO);
-        } catch (Exception e) {
-            log.error("获取文件详情失败", e);
-            return Result.error("获取文件详情失败: " + e.getMessage());
-        }
-    }
 }

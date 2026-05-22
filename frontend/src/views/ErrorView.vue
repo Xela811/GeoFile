@@ -32,17 +32,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
-// 从 URL 参数中获取后端传来的错误消息
-/*const errorMessage = computed(() => {
-  // 1. 尝试从标准 Vue Router query 获取
-  if (route.query.msg) return route.query.msg
 
-  // 2. 如果因为重定向导致参数在 # 之前，手动解析 window.location
-  const urlParams = new URLSearchParams(window.location.search)
-  const msgFromSearch = urlParams.get('msg')
-
-  return msgFromSearch || '发生未知错误，无法完成下载'
-})*/
 const errorMessage = computed(() => {
   // 在 createWebHistory 模式下，这里能直接拿到重定向过来的 query
   return route.query.msg || '发生未知错误，无法完成下载'

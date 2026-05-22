@@ -106,23 +106,6 @@ public class FileValidator {
     }
 
     /**
-     * 获取文件扩展名
-     */
-    private String getFileExtension(String filename) {
-        if (filename == null || !filename.contains(".")) {
-            return "";
-        }
-        return filename.substring(filename.lastIndexOf(".") + 1);
-    }
-
-    /**
-     * 获取文件大小限制
-     */
-    public long getMaxFileSize() {
-        return MAX_FILE_SIZE;
-    }
-
-    /**
      * 获取允许的文件类型列表
      */
     public String[] getAllowedTypes() {

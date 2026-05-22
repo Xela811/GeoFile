@@ -391,33 +391,4 @@ public class AmapServiceImpl implements AmapService {
             throw new RuntimeException("地址自动补全失败: " + e.getMessage(), e);
         }
     }
-
-    // ========== 便捷方法：搜索特定类型的 POI ==========
-
-    /**
-     * 搜索周边地铁站点
-     */
-    @Override
-    public POIResult[] searchSubwayStations(String key, String location, Integer radius) {
-        POISearchResult result = searchPOI(key, "地铁站", null, location, "080201", radius != null ? radius : 5000);
-        return result.getPois();
-    }
-
-    /**
-     * 搜索周边医院
-     */
-    @Override
-    public POIResult[] searchHospitals(String key, String location, Integer radius) {
-        POISearchResult result = searchPOI(key, "医院", null, location, "060000", radius != null ? radius : 5000);
-        return result.getPois();
-    }
-
-    /**
-     * 搜索周边餐厅
-     */
-    @Override
-    public POIResult[] searchRestaurants(String key, String location, Integer radius) {
-        POISearchResult result = searchPOI(key, "餐厅", null, location, "030000", radius != null ? radius : 5000);
-        return result.getPois();
-    }
 }

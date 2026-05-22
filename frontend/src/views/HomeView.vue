@@ -200,13 +200,13 @@
           class="preview-dialog"
         >
           <div v-loading="previewLoading" class="preview-body">
-            <template v-if="isImage(activeFile?.fileType)">
+            <template v-if="isImage(activeFile?.fileType || '')">
               <div class="img-wrapper">
                 <img :src="previewUrl" @load="previewLoading = false" class="preview-content-img" />
               </div>
             </template>
 
-            <template v-else-if="isDocOrText(activeFile?.fileType)">
+            <template v-else-if="isDocOrText(activeFile?.fileType || '')">
               <iframe
                 :src="previewUrl"
                 class="preview-iframe"
@@ -214,7 +214,7 @@
               ></iframe>
             </template>
 
-            <template v-else-if="isVideo(activeFile?.fileType)">
+            <template v-else-if="isVideo(activeFile?.fileType || '')">
               <div class="video-wrapper">
                 <video
                   :src="previewUrl"
@@ -228,7 +228,7 @@
               </div>
             </template>
 
-            <template v-else-if="isAudio(activeFile?.fileType)">
+            <template v-else-if="isAudio(activeFile?.fileType || '')">
               <div class="audio-wrapper">
                 <audio :src="previewUrl" controls autoplay @canplay="previewLoading = false">
                   您的浏览器不支持音频播放
@@ -236,7 +236,7 @@
               </div>
             </template>
 
-            <template v-else-if="isArchive(activeFile?.fileType)">
+            <template v-else-if="isArchive(activeFile?.fileType || '')">
               <div class="archive-preview">
                 <div class="archive-header">
                   <el-icon><FolderOpened /></el-icon>
@@ -263,7 +263,7 @@
               </div>
             </template>
 
-            <template v-else-if="isInstaller(activeFile?.fileType)">
+            <template v-else-if="isInstaller(activeFile?.fileType || '')">
               <div class="installer-info-box" style="text-align: center; padding: 40px 0">
                 <el-icon size="80" color="#409eff"><Platform /></el-icon>
                 <h3 style="margin-top: 20px">
@@ -277,7 +277,7 @@
                     activeFile?.fileName
                   }}</el-descriptions-item>
                   <el-descriptions-item label="大小">{{
-                    formatFileSize(activeFile?.fileSize)
+                    formatFileSize(activeFile?.fileSize ?? 0)
                   }}</el-descriptions-item>
                 </el-descriptions>
                 <el-button type="primary" size="large" @click="downloadFileFromPreview">
@@ -437,7 +437,7 @@
                   <el-alert
                     :title="
                       '还可下载 ' +
-                      (selectedFile.maxDownloads - (selectedFile.downloadCount || 0)) +
+                      ((selectedFile.maxDownloads ?? 0) - (selectedFile.downloadCount || 0)) +
                       ' 次'
                     "
                     type="success"
@@ -680,7 +680,7 @@ const handleGetCurrentLocation = async () => {
       city: coarseAddress.city,
       useFixedCoords: useFixedCoordinates.value,
       updateTime: new Date().toISOString(),
-    }
+    } as any
 
     // 4. 保存到localStorage
     localStorage.setItem('userLocation', JSON.stringify(locationInfo.value))
@@ -702,7 +702,7 @@ const lastSearchFileType = ref('')
 // 搜索附近文件（会退出「取件码私有列表」视图）
 const handleSearch = async (mode = 'keep') => {
   //if (isExtractListView.value && mode !== 'force' && mode !== 'public') return
-  // 🌟 核心拦截机制微调：如果当前处于公开分享链接展示模式，直接切入前端本地筛选，安全且速度极快
+  // 核心拦截机制微调：如果当前处于公开分享链接展示模式，直接切入前端本地筛选，安全且速度极快
   if (isExtractListView.value && mode !== 'force' && mode !== 'public') {
     console.log('当前处于分享列表视图，执行纯前端多条件筛选...')
     applyExtractPage() // 触发上面改造好的过滤分页函数
@@ -814,10 +814,10 @@ const handleSearch = async (mode = 'keep') => {
         paginationInfo.value.hasNext = false
       }
       if (!isExtractListView.value) {
-  // 🌟 核心修正：只有在明确是主动发起搜索、切换模式时（mode === 'public'）或者处于提取码初始化时，才弹出总数提示
+  //  核心修正：只有在明确是主动发起搜索、切换模式时（mode === 'public'）或者处于提取码初始化时，才弹出总数提示
   // 翻页时（mode === 'keep'）保持静默，不触发 ElMessage 轰炸用户
   if (mode === 'public' || paginationInfo.value.pageNum === 1) {
-    // 🌟 核心修正：msg 提示的总数应当是 finalTotal（也就是后端统计出的真实总文件数），而不是当前页的 files.length
+    // 核心修正：msg 提示的总数应当是 finalTotal（也就是后端统计出的真实总文件数），而不是当前页的 files.length
     const msg = activeExtractCode.value
       ? `已成功提取私有文件，共 ${finalTotal} 个`
       : `搜索成功，共找到附近的 ${finalTotal} 个文件`
@@ -874,7 +874,7 @@ const applyExtractPage = () => {
       const rawType = file.fileType.toLowerCase().trim() // 后端返回的后缀名，如 png, mp4
       let mappedType = '' // 前端大类标签
 
-      // 🌟 直接调用你写好的函数和 Set 进行归类
+      //  直接调用你写好的函数和 Set 进行归类
       if (isImage(rawType)) {
         mappedType = 'image'        // 匹配图片大类
       } else if (isVideo(rawType)) {
@@ -1221,6 +1221,7 @@ const getPosParams = () => {
 
 // 下载文件
 const downloadFile = async () => {
+  
   // 1. 基础校验
   if (!selectedFile.value) {
     ElMessage.warning('请先选择一个文件')
@@ -1235,15 +1236,15 @@ const downloadFile = async () => {
       selectedFile.value = syncData.data
 
       // 拦截超距
-      if (selectedFile.value.distanceExceeded) {
+      if (selectedFile.value!.distanceExceeded) {
         ElMessage.error('当前距离已超出1km限制，已被服务器拒绝下载')
         return
       }
 
       // 如果同步后发现已经满了，直接拦截，不走下载流
       if (
-        selectedFile.value.maxDownloads > 0 &&
-        selectedFile.value.downloadCount >= selectedFile.value.maxDownloads
+        (selectedFile.value!.maxDownloads ?? 0) > 0 &&
+        (selectedFile.value!.downloadCount ?? 0) >= (selectedFile.value!.maxDownloads ?? 0)
       ) {
         ElMessage.error('该文件刚刚已达到下载次数上限')
         return
@@ -1255,7 +1256,7 @@ const downloadFile = async () => {
   // --- 同步结束 ---
 
   // 2. 直接从当前选中的文件对象中获取 token
-  const token = selectedFile.value.downloadToken
+  const token = selectedFile.value!.downloadToken
 
   if (!token) {
     ElMessage.error('该文件缺少下载凭证，请刷新列表重试')
@@ -1265,10 +1266,10 @@ const downloadFile = async () => {
   try {
     ElMessage.success('开始下载文件...')
 
-    // ==================== ✨ 修复核心：安全拼接参数，杜绝多问号和丢 Token Bug ====================
+    // ====================  修复核心：安全拼接参数，杜绝多问号和丢 Token Bug ====================
     // 1. 提取基础参数
-    const fileId = selectedFile.value.id
-    const token = selectedFile.value.downloadToken
+    const fileId = selectedFile.value!.id
+    const token = selectedFile.value!.downloadToken!
 
     // 2. 使用原生的 URLSearchParams 动态组装参数，这样绝对不会漏掉或错乱
     const params = new URLSearchParams()
@@ -1311,7 +1312,7 @@ const downloadFile = async () => {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = selectedFile.value.fileName || 'file'
+    a.download = selectedFile.value!.fileName || 'file'
     document.body.appendChild(a)
     a.click()
 
@@ -1322,31 +1323,12 @@ const downloadFile = async () => {
     ElMessage.success('下载成功')
 
     // 不要手动 += 1，而是直接请求后端拿最权威的数据
-    const finalRes = await fetch(`/api/file/detail/${selectedFile.value.id}`)
+    const finalRes = await fetch(`/api/file/detail/${selectedFile.value!.id}`)
     const finalData = await finalRes.json()
     if (finalData.code === 200) {
       selectedFile.value = finalData.data
     }
 
-    // 7. 下载成功后重新获取文件列表，更新下载次数
-    //await handleSearch()
-    // --- 核心修改部分 ---
-
-    // 1. 前端先行：立刻让界面上的次数 +1
-    // 这样进度条和描述项会瞬间更新，不会出现“变为0”的情况
-    /*if (selectedFile.value.downloadCount !== undefined) {
-      selectedFile.value.downloadCount += 1
-    } else {
-      selectedFile.value.downloadCount = 1
-    }
-
-    ElMessage.success('下载成功')*/
-
-    // 2. 延迟同步：给后端数据库写入留出 1 秒缓冲时间，再刷新列表
-    // 这样可以避免 handleSearch 拿到还没更新完的旧数据（或 0）
-    /*setTimeout(() => {
-      handleSearch()
-    }, 1000)*/
   } catch (error: any) {
     console.error('下载文件失败:', error)
 
@@ -1369,27 +1351,12 @@ const downloadFile = async () => {
 const copyFileLink = () => {
   if (!selectedFile.value) return
 
-  /*const url =
-    window.location.origin +
-    `/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`*/
-
   let url = ''
-
-  // 🌟 核心分流决策树：
-  // 1. 如果文件是公开文件 (isPrivate === 0)
-  // 2. 并且它绑定了物理经纬度 (说明它受到 1km 地理围栏圈保护)
-  /*if (selectedFile.value.isPrivate === 0 && selectedFile.value.locationLat != null) {
-    // 【分流 A】：复制指向前端中转验证页面的链接，带上 Query 参数
-    url = `${window.location.origin}/download-redirect?fileId=${selectedFile.value.id}&token=${selectedFile.value.downloadToken}`
-  } else {
-    // 【分流 B】：如果是私有加密文件或无位置普通文件，直接提供后端的直连盲抓流链接
-    url = `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
-  }*/
 
   // 1. 公开文件判定
   const isPublic = !currentFileIsPrivate.value
 
-  // 2. ✨ 全字段兼容性防御
+  // 2.  全字段兼容性防御
   // 看看后端到底是返回的 locationLat、locationLng 还是小写的 lat、lng 或者是字符形式
   const fileObj = selectedFile.value as any
 
@@ -1405,12 +1372,12 @@ const copyFileLink = () => {
 
   console.log('【Debug 分流决策修正版】', { isPublic, hasLocation })
 
-  // 🌟 核心分流决策树
+  //  核心分流决策树
   if (isPublic && hasLocation) {
-    // 【分流 A】：如果是公开且有位置的文件 ➡️ 走前端中转验证页面
+    // 【分流 A】：如果是公开且有位置的文件  走前端中转验证页面
     url = `${window.location.origin}/download-redirect?fileId=${selectedFile.value.id}&token=${selectedFile.value.downloadToken}`
   } else {
-    // 【分流 B】：如果是私密文件或普通无位置文件 ➡️ 直接提供后端的直连盲抓流链接
+    // 【分流 B】：如果是私密文件或普通无位置文件 ️ 直接提供后端的直连盲抓流链接
     url = `${window.location.origin}/api/file/download/${selectedFile.value.id}?token=${selectedFile.value.downloadToken}`
   }
 
@@ -1719,14 +1686,6 @@ const checkAndExtract = () => {
   let tokenFromUrl = route.params.token || route.query.token
 
   // 2. 如果 Router 没拿到 (Hash 模式下的冷启动 bug)，直接解析原生 Hash 字符串
-  /*if (!codeFromUrl) {
-    const hash = window.location.hash // 获取类似 "#/s/0WHNW"
-    if (hash && hash.includes('/s/')) {
-      // 这里的逻辑：分割字符串，取最后一个斜杠后面的部分
-      const parts = hash.split('/')
-      codeFromUrl = parts[parts.length - 1]
-    }
-  }*/
   if (!codeFromUrl && !tokenFromUrl) {
     const hashOrUrl = window.location.href
     if (hashOrUrl.includes('/s/')) {
@@ -1741,8 +1700,9 @@ const checkAndExtract = () => {
   console.log('解析到的 Code:', codeFromUrl)
 
   if (codeFromUrl) {
+    const finalCode = Array.isArray(codeFromUrl) ? codeFromUrl[0] : codeFromUrl
     // 自动填充输入框
-    extractCode.value = codeFromUrl
+    extractCode.value = finalCode || ''
 
     // 触发后端接口请求
     setTimeout(() => {
@@ -1751,7 +1711,8 @@ const checkAndExtract = () => {
   } else if (tokenFromUrl) {
     // 公开分享不需要填充输入框，直接调用根据 Token 加载的逻辑
     setTimeout(() => {
-      handleLoadPublicBatchByToken(tokenFromUrl)
+      const finalToken = Array.isArray(tokenFromUrl) ? tokenFromUrl[0] : tokenFromUrl
+      handleLoadPublicBatchByToken(finalToken || '')
     }, 500)
   }
 }
@@ -1769,6 +1730,7 @@ watch(
       checkAndExtract()
     }
   },
+  { immediate: true }
 )
 
 /**
@@ -1873,7 +1835,9 @@ const exitExtractModeAndSearch = () => {
   isExtractListView.value = false
   extractedFilesFull.value = []
   // 触发一次常规的定位和搜索，让页面不至于空白
+  // @ts-ignore
   if (typeof initLocation === 'function') {
+    // @ts-ignore
     initLocation()
   } else {
     handleSearch('public')
@@ -1919,7 +1883,7 @@ const handlePreview = async (file: NearbyFile) => {
   if (!file) return
 
   // 判断逻辑：如果设置了最大下载次数(maxDownloads > 0)，且当前次数已达到或超过上限
-  if (file.maxDownloads > 0 && file.downloadCount >= file.maxDownloads) {
+  if ((file.maxDownloads ?? 0) > 0 && (file.downloadCount ?? 0) >= (file.maxDownloads ?? 0)) {
     ElMessage.error('该文件预览/下载次数已达上限，无法访问')
     return
   }
@@ -2019,7 +1983,7 @@ const isArchive = (fileType: string) => {
 }
 
 const currentFileIsPrivate = computed(() => {
-  return selectedFile.value?.isPrivate || false
+  return selectedFile.value?.isPrivate === 1
 })
 </script>
 

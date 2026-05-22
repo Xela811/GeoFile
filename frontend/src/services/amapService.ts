@@ -184,8 +184,8 @@ class AmapService {
    */
   async searchPOI(
     keywords: string,
-    city?: string,
     location: string,
+    city?: string,
     type?: string,
     radius: number = 5000,
   ): Promise<POISearchResult> {
@@ -261,7 +261,7 @@ class AmapService {
    * @returns 地铁站列表
    */
   async searchSubwayStations(location: string, radius: number = 5000): Promise<POIResult[]> {
-    const result = await this.searchPOI('地铁站', null, location, '080201', radius)
+    const result = await this.searchPOI('地铁站', location, undefined, '080201', radius)
     return result.pois
   }
 
@@ -273,7 +273,7 @@ class AmapService {
    * @returns 医院列表
    */
   async searchHospitals(location: string, radius: number = 5000): Promise<POIResult[]> {
-    const result = await this.searchPOI('医院', null, location, '060000', radius)
+    const result = await this.searchPOI('医院', location, undefined, '060000', radius)
     return result.pois
   }
 
@@ -285,7 +285,7 @@ class AmapService {
    * @returns 餐厅列表
    */
   async searchRestaurants(location: string, radius: number = 5000): Promise<POIResult[]> {
-    const result = await this.searchPOI('餐厅', null, location, '030000', radius)
+    const result = await this.searchPOI('餐厅', location, undefined, '030000', radius)
     return result.pois
   }
 

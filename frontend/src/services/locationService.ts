@@ -33,6 +33,9 @@ export interface NearbyFile {
   downloadToken?: string // 下载令牌
   downloadCount?: number // 下载次数
   maxDownloads?: number // 下载次数上限（0表示不限制）
+  //【新增以下两个缺少的后端字段，消除 TS2339 报错】
+  isPrivate?: number     // 是否是私密文件/需要提取码 (1: 是, 0: 否)
+  distanceExceeded?: boolean // 距离是否超限
 }
 
 export interface LocationResponse {
@@ -128,8 +131,8 @@ class LocationService {
         },
         {
           enableHighAccuracy: false, // 启用高精度定位
-          timeout: 10000, // 超时时间10秒
-          maximumAge: 0, // 不使用缓存的位置
+          timeout: 5000, // 超时时间5秒
+          maximumAge: 60000, // 不使用缓存的位置
         },
       )
     })
@@ -231,13 +234,13 @@ class LocationService {
   calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
     const EARTH_RADIUS = 6371000 // 地球半径(米)
 
-    const latDistance = Math.toRadians(lat2 - lat1)
-    const lngDistance = Math.toRadians(lng2 - lng1)
+    const latDistance = (lat2 - lat1) * (Math.PI / 180)
+    const lngDistance = (lng2 - lng1) * (Math.PI / 180)
 
     const a =
       Math.sin(latDistance / 2) * Math.sin(latDistance / 2) +
-      Math.cos(Math.toRadians(lat1)) *
-        Math.cos(Math.toRadians(lat2)) *
+      Math.cos(lat1 * (Math.PI / 180)) *
+        Math.cos(lat2 * (Math.PI / 180)) *
         Math.sin(lngDistance / 2) *
         Math.sin(lngDistance / 2)
 

@@ -31,7 +31,6 @@ public class IpUtils {
 
         if (ip == null || ip.isBlank()) return "unknown";
         return "0:0:0:0:0:0:0:1".equals(ip.trim()) ? "127.0.0.1" : ip.split(",")[0].trim();
-        //return "0:0:0:0:0:0:0:1".equals(ip) ? "127.0.0.1" : ip.split(",")[0];
 
     }
 }

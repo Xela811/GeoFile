@@ -107,10 +107,7 @@ public class FileDeleteController {
                     .eq(File::getDeleted, 0));
 
             if (aliveCount == 0) {
-//                // 说明该批次（Token）下的所有文件都已进入 status=0 (手动删除) 或被逻辑删除
-//                String geoKey = "file:locations:public";
-//                redisTemplate.opsForZSet().remove(geoKey, currentToken);
-//                log.info("该批次文件已全部删除，同步清理 RedisGEO 索引: token={}", currentToken);
+                // 说明该批次（Token）下的所有文件都已进入 status=0 (手动删除) 或被逻辑删除
                 boolean isPrivate = file.getIsPrivate() != null && file.getIsPrivate() == 1;
                 // 1. 【精准清理】判断批次类型
                 // 建议查询一下该批次的信息，或者看 file 表记录

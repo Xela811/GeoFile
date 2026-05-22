@@ -72,12 +72,6 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Value("${file.upload.path:/home/xela/Projects/GeoFile/uploads}")
     private String uploadPath;
 
-    // 存储分片上传信息（实际项目中应该存入数据库或Redis）
-    private final Map<String, ChunkUploadInfo> chunkUploadMap = new ConcurrentHashMap<>();
-
-    private static final String CHUNK_PREFIX = "chunk:";
-    private static final int CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
-
     @Autowired
     private DownloadLimitService downloadLimitService;
 
@@ -433,14 +427,6 @@ public class FileUploadServiceImpl implements FileUploadService {
             // -------------------------
         }
 
-//        if (Boolean.TRUE.equals(needCode)) {
-//            // 根据这一批次共用的 Token，一次性更新所有文件的私有标识
-//            fileService.update(null, new LambdaUpdateWrapper<File>()
-//                    .eq(File::getUploadToken, batchUploadToken)
-//                    .set(File::getIsPrivate, 1));
-//            log.info("已批量更新批次 {} 的私有标识为 1", batchUploadToken);
-//        }
-
         // 4. 将取件码与这批文件的关系存入 Redis (如果你之前的逻辑是存 Redis)
         // 建议存：code -> batchUploadToken，这样通过一个码就能找到一组文件
         if (Boolean.TRUE.equals(needCode) && downloadCode != null) {
@@ -455,239 +441,6 @@ public class FileUploadServiceImpl implements FileUploadService {
         }
 
         return results;
-    }
-
-    @Override
-    public UploadInfo initChunkUpload(String fileName, long fileSize, int chunkSize, int chunkIndex) {
-        // 计算总分片数
-        int totalChunks = (int) Math.ceil((double) fileSize / chunkSize);
-
-        // 生成上传ID
-        String uploadId = UUID.randomUUID().toString();
-
-        // 创建上传信息
-        ChunkUploadInfo chunkInfo = new ChunkUploadInfo();
-        chunkInfo.setUploadId(uploadId);
-        chunkInfo.setFileName(fileName);
-        chunkInfo.setFileSize(fileSize);
-        chunkInfo.setChunkSize(chunkSize);
-        chunkInfo.setTotalChunks(totalChunks);
-        chunkInfo.setUploadedChunks(chunkIndex);
-        chunkInfo.setCompleted(false);
-        chunkInfo.setFileHash(generateFileHash()); // 简化版，实际应该计算文件的MD5
-
-        // 存储到Map
-        chunkUploadMap.put(uploadId, chunkInfo);
-
-        // 存储到Redis
-        String redisKey = CHUNK_PREFIX + uploadId;
-        redisUtil.set(redisKey, chunkInfo, 30 * 60,TimeUnit.SECONDS); // 30分钟过期
-
-        log.info("分片上传初始化成功: {}, 总分片数: {}", uploadId, totalChunks);
-
-        // 返回上传信息
-        UploadInfo info = new UploadInfo();
-        info.setUploadId(uploadId);
-        info.setFileName(fileName);
-        info.setFileSize(fileSize);
-        info.setChunkSize(chunkSize);
-        info.setTotalChunks(totalChunks);
-        info.setUploadedChunks(chunkIndex);
-        info.setCompleted(false);
-
-        return info;
-    }
-
-    @Override
-    public UploadProgress uploadChunk(MultipartFile chunk, String fileName, int chunkIndex, int totalChunks, String fileHash) {
-        // 获取上传信息
-        ChunkUploadInfo chunkInfo = getChunkUploadInfo(fileName, chunkIndex);
-
-        if (chunkInfo == null) {
-            throw new IllegalArgumentException("上传信息不存在");
-        }
-
-        // 保存分片
-        saveChunk(chunk, chunkInfo);
-
-        // 更新已上传分片数
-        chunkInfo.setUploadedChunks(chunkIndex + 1);
-
-        // 更新上传进度
-        int progress = (int) ((chunkInfo.getUploadedChunks() * 100.0) / chunkInfo.getTotalChunks());
-
-        // 检查是否全部上传完成
-        if (chunkInfo.getUploadedChunks() >= chunkInfo.getTotalChunks()) {
-            chunkInfo.setCompleted(true);
-        }
-
-        // 更新Redis
-        String redisKey = CHUNK_PREFIX + chunkInfo.getUploadId();
-        redisUtil.set(redisKey, chunkInfo, 30 * 60, TimeUnit.SECONDS);
-
-        log.info("分片上传成功: {}, 进度: {}%", chunkInfo.getUploadId(), progress);
-
-        // 返回上传进度
-        UploadProgress progressVO = new UploadProgress();
-        progressVO.setUploadId(chunkInfo.getUploadId());
-        progressVO.setCurrentChunk(chunkInfo.getUploadedChunks());
-        progressVO.setTotalChunks(chunkInfo.getTotalChunks());
-        progressVO.setProgress(progress);
-        progressVO.setStatus(chunkInfo.isCompleted() ? "completed" : "uploading");
-        progressVO.setFileName(chunkInfo.getFileName());
-        progressVO.setFileSize(chunkInfo.getFileSize());
-        progressVO.setUploadedBytes((chunkInfo.getUploadedChunks() * chunkInfo.getChunkSize()));
-
-        return progressVO;
-    }
-
-    @Override
-    public FileVO mergeChunks(String fileName, int totalChunks, String fileHash) {
-        try {
-            // 获取上传信息
-            ChunkUploadInfo chunkInfo = getChunkUploadInfo(fileName, -1);
-
-            if (chunkInfo == null || !chunkInfo.isCompleted()) {
-                throw new IllegalArgumentException("分片上传未完成");
-            }
-
-            // 合并分片
-            FileVO mergedFile = mergeChunksToFile(chunkInfo, fileHash);
-
-            // 清理临时分片
-            cleanupChunks(chunkInfo);
-
-            log.info("分片合并成功: {}", fileName);
-
-            return mergedFile;
-
-        } catch (IOException e) {
-            log.error("分片合并失败", e);
-            throw new RuntimeException("分片合并失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 保存分片
-     */
-    private void saveChunk(MultipartFile chunk, ChunkUploadInfo chunkInfo) {
-        try {
-            // 生成分片文件名
-            String chunkFileName = chunkInfo.getUploadId() + "_chunk_" + chunkInfo.getUploadedChunks();
-
-            // 保存分片
-            Path chunkPath = Paths.get(uploadPath, "temp", chunkFileName);
-            Files.createDirectories(chunkPath.getParent());
-            chunk.transferTo(chunkPath);
-
-            log.debug("分片保存成功: {}", chunkFileName);
-
-        } catch (IOException e) {
-            log.error("分片保存失败", e);
-            throw new RuntimeException("分片保存失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 获取分片上传信息
-     */
-    private ChunkUploadInfo getChunkUploadInfo(String fileName, int chunkIndex) {
-        // 先从Map中查找
-        for (ChunkUploadInfo info : chunkUploadMap.values()) {
-            if (info.getFileName().equals(fileName)) {
-                return info;
-            }
-        }
-
-        // 再从Redis中查找
-        for (ChunkUploadInfo info : chunkUploadMap.values()) {
-            String redisKey = CHUNK_PREFIX + info.getUploadId();
-            ChunkUploadInfo storedInfo = (ChunkUploadInfo) redisUtil.get(redisKey);
-            if (storedInfo != null && storedInfo.getFileName().equals(fileName)) {
-                chunkUploadMap.put(info.getUploadId(), storedInfo);
-                return storedInfo;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * 合并分片
-     */
-    private FileVO mergeChunksToFile(ChunkUploadInfo chunkInfo, String fileHash) throws IOException {
-        // 生成最终文件名
-        String extension = getFileExtension(chunkInfo.getFileName());
-        String finalFileName = chunkInfo.getFileName() + "." + extension;
-
-        // 创建目标路径
-        Path targetPath = Paths.get(uploadPath, "temp", finalFileName);
-
-        // 检查是否已存在同名文件（秒传逻辑）
-        if (fileHash != null && checkFileExists(fileHash)) {
-            log.info("文件已存在，跳过上传: {}", fileHash);
-            return getFileByHash(fileHash);
-        }
-
-        // 合并分片
-        Path tempDir = Paths.get(uploadPath, "temp", chunkInfo.getUploadId());
-        List<Path> chunkFiles = new ArrayList<>();
-
-        for (int i = 0; i < chunkInfo.getTotalChunks(); i++) {
-            Path chunkFile = tempDir.resolve(chunkInfo.getUploadId() + "_chunk_" + i);
-            if (Files.exists(chunkFile)) {
-                chunkFiles.add(chunkFile);
-            }
-        }
-
-        // 合并所有分片
-        try (java.io.FileOutputStream fos = new FileOutputStream(targetPath.toFile())) {
-            for (Path chunkFile : chunkFiles) {
-                Files.copy(chunkFile, fos);
-            }
-        }
-
-        // 生成文件信息
-        File fileEntity = new File();
-        fileEntity.setFileName(finalFileName);
-        fileEntity.setFileType(extension);
-        fileEntity.setFileSize(Files.size(targetPath));
-        fileEntity.setFilePath(targetPath.toString());
-        fileEntity.setOriginalName(chunkInfo.getFileName());
-        fileEntity.setStorageType("LOCAL");
-        fileEntity.setUploadTime(Date.from(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant()));
-        fileEntity.setStatus(1);
-        fileEntity.setDownloadCount(0);
-        fileEntity.setExpireTime(Date.from(LocalDateTime.now().plusMinutes(30).atZone(ZoneId.systemDefault()).toInstant())); // 默认30分钟
-
-        // 生成上传令牌（用于免登录身份验证）
-        String uploadToken = generateUploadToken();
-        fileEntity.setUploadToken(uploadToken);
-
-        // 生成下载令牌（用于下载验证）
-        String downloadToken = generateDownloadToken(fileEntity.getId());
-        fileEntity.setDownloadToken(downloadToken);
-
-        // 处理下载限制（默认1次，30分钟）
-        DownloadLimit downloadLimit = new DownloadLimit();
-        downloadLimit.setFileId(fileEntity.getId());
-        downloadLimit.setMaxDownloads(1); // 默认1次
-        downloadLimit.setValidMinutes(30); // 默认30分钟
-        downloadLimitService.save(downloadLimit);
-
-        fileEntity.setDownloadLimitId(downloadLimit.getId());
-
-        // 保存到数据库
-        fileService.save(fileEntity);
-
-        return convertToFileVO(fileEntity);
-    }
-
-    /**
-     * 生成文件哈希（简化版，实际应该计算MD5）
-     */
-    private String generateFileHash() {
-        return UUID.randomUUID().toString();
     }
 
     @Override
@@ -816,9 +569,6 @@ public class FileUploadServiceImpl implements FileUploadService {
     public List<FileVO> verifyAndGetFiles(String code) {
         // 1. 通过 code 反查 uploadToken (这一步没问题)
         String uploadToken = (String) redisUtil.get("code:to:token:" + code);
-//        if (uploadToken == null) {
-//            throw new IllegalArgumentException("取件码错误或已过期");
-//        }
         // 2. 如果 Redis 没了，尝试从数据库回源
         if (uploadToken == null) {
             FileBatch batch = fileBatchService.getOne(new LambdaQueryWrapper<FileBatch>()
@@ -978,61 +728,6 @@ public class FileUploadServiceImpl implements FileUploadService {
     }
 
     /**
-     * 检查文件是否存在
-     */
-    private boolean checkFileExists(String fileHash) {
-        // TODO: 实现文件哈希查询逻辑
-        return false;
-    }
-
-    /**
-     * 根据哈希获取文件
-     */
-    private FileVO getFileByHash(String fileHash) {
-        // TODO: 实现文件查询逻辑
-        return null;
-    }
-
-    /**
-     * 清理分片文件
-     */
-    private void cleanupChunks(ChunkUploadInfo chunkInfo) {
-        try {
-            Path tempDir = Paths.get(uploadPath, "temp", chunkInfo.getUploadId());
-            Files.deleteIfExists(tempDir);
-            log.debug("分片文件清理成功: {}", tempDir);
-        } catch (IOException e) {
-            log.error("分片文件清理失败", e);
-        }
-    }
-
-    /**
-     * 根据地理位置搜索附近文件
-     */
-    public List<FileVO> searchNearbyFiles(Double lat, Double lng, Integer radius, Long excludeFileId) {
-        try {
-            // 由于FileLocationService需要注入FileMapper，这里直接调用方法
-            // 实际项目中应该通过Spring注入
-            return fileLocationService.searchNearbyFiles(lat, lng, radius, excludeFileId,
-                    1, 100, "upload_time", "DESC", null, null);
-        } catch (Exception e) {
-            log.error("搜索附近文件失败", e);
-            return new ArrayList<>();
-        }
-    }
-
-    /**
-     * 更新文件地理位置信息
-     */
-    public void updateFileLocation(Long fileId, Double lat, Double lng, Integer radius) {
-        try {
-            fileLocationService.updateFileLocation(fileId, lat, lng, radius);
-        } catch (Exception e) {
-            log.error("更新文件地理位置失败", e);
-        }
-    }
-
-    /**
      * 获取文件扩展名
      */
     private String getFileExtension(String filename) {
@@ -1089,37 +784,5 @@ public class FileUploadServiceImpl implements FileUploadService {
         }
 
         return vo;
-    }
-
-    /**
-     * 分片上传信息内部类
-     */
-    private static class ChunkUploadInfo {
-        private String uploadId;
-        private String fileName;
-        private long fileSize;
-        private int chunkSize;
-        private int totalChunks;
-        private int uploadedChunks;
-        private boolean completed;
-        private String fileHash;
-
-        // getters and setters
-        public String getUploadId() { return uploadId; }
-        public void setUploadId(String uploadId) { this.uploadId = uploadId; }
-        public String getFileName() { return fileName; }
-        public void setFileName(String fileName) { this.fileName = fileName; }
-        public long getFileSize() { return fileSize; }
-        public void setFileSize(long fileSize) { this.fileSize = fileSize; }
-        public int getChunkSize() { return chunkSize; }
-        public void setChunkSize(int chunkSize) { this.chunkSize = chunkSize; }
-        public int getTotalChunks() { return totalChunks; }
-        public void setTotalChunks(int totalChunks) { this.totalChunks = totalChunks; }
-        public int getUploadedChunks() { return uploadedChunks; }
-        public void setUploadedChunks(int uploadedChunks) { this.uploadedChunks = uploadedChunks; }
-        public boolean isCompleted() { return completed; }
-        public void setCompleted(boolean completed) { this.completed = completed; }
-        public String getFileHash() { return fileHash; }
-        public void setFileHash(String fileHash) { this.fileHash = fileHash; }
     }
 }

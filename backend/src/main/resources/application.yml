@@ -22,7 +22,7 @@ spring:
       max-request-size: 10GB
 # JWT配置
 jwt:
-  secret: geofile-secret-key-2024-2025-very-long-secret-key-for-jwt-generation
+  secret: ${JWT_SECRET}
   expiration: 300  # 验证码有效期5分钟
 
 mybatis-plus:
@@ -56,4 +56,4 @@ amap:
 # 文件上传配置
 file:
   upload:
-    path: /home/xela/Projects/GeoFile/uploads
+    path: ${user.home}/Projects/GeoFile/uploads

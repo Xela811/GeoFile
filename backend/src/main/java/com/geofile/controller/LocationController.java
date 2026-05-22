@@ -1,19 +1,16 @@
 package com.geofile.controller;
 
 import com.geofile.common.Result;
-import com.geofile.entity.FileVO;
 import com.geofile.entity.LocationRequest;
 import com.geofile.service.FileLocationService;
 import com.geofile.service.FileUploadService;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,12 +23,6 @@ import java.util.Map;
 @CrossOrigin
 @Tag(name = "地理位置服务", description = "基于HTML5 Geolocation API的地理位置服务")
 public class LocationController {
-
-    @Autowired
-    private FileLocationService fileLocationService;
-
-    @Autowired
-    private FileUploadService fileUploadService;
 
     /**
      * 获取当前用户位置
@@ -83,88 +74,5 @@ public class LocationController {
             log.error("保存位置信息失败", e);
             return Result.error("保存位置信息失败: " + e.getMessage());
         }
-    }
-
-    /**
-     * 获取附近文件
-     */
-    @GetMapping("/nearby")
-    @Operation(summary = "获取附近文件", description = "根据用户地理位置搜索附近的文件")
-    public Result<Map<String, Object>> getNearbyFiles(
-            @Parameter(description = "纬度") @RequestParam Double lat,
-            @Parameter(description = "经度") @RequestParam Double lng,
-            @Parameter(description = "半径(米)，默认1000米") @RequestParam(defaultValue = "1000") Integer radius,
-            @Parameter(description = "排除的文件ID") @RequestParam(required = false) Long excludeFileId) {
-
-        try {
-            log.info("搜索附近文件: lat={}, lng={}, radius={}, excludeFileId={}", lat, lng, radius, excludeFileId);
-
-            // 先保存用户位置
-            Map<String, Object> locationData = new HashMap<>();
-            locationData.put("lat", lat);
-            locationData.put("lng", lng);
-            locationData.put("radius", radius);
-
-            // 保存位置信息
-            Long userId = System.currentTimeMillis();
-            locationData.put("userId", userId);
-
-            // 搜索附近文件（向后兼容，不传分页和搜索参数）
-            List<FileVO> files = fileLocationService.searchNearbyFiles(
-                lat, lng, radius, excludeFileId,
-                1, 100, "upload_time", "DESC", null, null
-            );
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("location", locationData);
-            result.put("files", files);
-            result.put("count", files.size());
-
-            return Result.success(result);
-
-        } catch (Exception e) {
-            log.error("搜索附近文件失败", e);
-            return Result.error("搜索附近文件失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 估算文件距离
-     */
-    @GetMapping("/distance")
-    @Operation(summary = "估算文件距离", description = "计算用户位置与文件位置的距离")
-    public Result<Double> calculateDistance(
-            @Parameter(description = "用户纬度") @RequestParam Double userLat,
-            @Parameter(description = "用户经度") @RequestParam Double userLng,
-            @Parameter(description = "文件纬度") @RequestParam Double fileLat,
-            @Parameter(description = "文件经度") @RequestParam Double fileLng) {
-
-        try {
-            // 使用Haversine公式计算距离
-            double distance = haversineDistance(userLat, userLng, fileLat, fileLng);
-            return Result.success(distance);
-        } catch (Exception e) {
-            log.error("计算距离失败", e);
-            return Result.error("计算距离失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 计算两点之间的距离（米）
-     * 使用Haversine公式
-     */
-    private double haversineDistance(double lat1, double lng1, double lat2, double lng2) {
-        final int EARTH_RADIUS = 6371000; // 地球半径(米)
-
-        double latDistance = Math.toRadians(lat2 - lat1);
-        double lngDistance = Math.toRadians(lng2 - lng1);
-
-        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
-                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-                * Math.sin(lngDistance / 2) * Math.sin(lngDistance / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return EARTH_RADIUS * c;
     }
 }

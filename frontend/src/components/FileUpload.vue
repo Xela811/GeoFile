@@ -50,7 +50,7 @@
                   <div class="file-name-wrapper">
                     <span class="file-name" :title="file.name">{{ file.name }}</span>
                   </div>
-                  <span class="file-size">{{ formatFileSize(file.size) }}</span>
+                  <span class="file-size">{{ formatFileSize(file.size ?? 0) }}</span>
                 </div>
 
                 <el-progress
@@ -67,8 +67,8 @@
                 />
 
                 <div class="upload-meta" v-if="file.status === 'uploading'">
-                  <span v-if="file.uploadSpeed">速度: {{ file.uploadSpeed }}</span>
-                  <span v-if="file.remainingTime">预计剩余: {{ file.remainingTime }}</span>
+                  <span v-if="(file as any).uploadSpeed">速度: {{ (file as any).uploadSpeed }}</span>
+                  <span v-if="(file as any).remainingTime">预计剩余: {{ (file as any).remainingTime }}</span>
                 </div>
               </div>
             </div>
@@ -82,7 +82,7 @@
                 icon="Delete"
                 circle
                 size="small"
-                @click="handleDelete(file)"
+                @click="handleDelete(file as any)"
               />
             </div>
           </div>
@@ -192,7 +192,7 @@ const emit = defineEmits<{
   success: [files: UploadUserFile[]]
   error: [error: Error]
   'upload-change': [files: UploadUserFile[]]
-  'upload-success': [fileData: any]
+  'upload-success': [fileData: any, length?: number]
   'require-limit-config': []
   'update:loading': [value: boolean]
 }>()
@@ -384,14 +384,6 @@ const startUpload = async () => {
     // 2. 准备 FormData
     const formData = new FormData()
     let hasFilesToUpload = false // 标记是否还有需要真正网络上传的文件
-    /*fileList.value.forEach((file) => {
-      if (file.raw) {
-        formData.append('files', file.raw)
-        // 初始化进度条为 0，状态为上传中
-        file.status = 'uploading'
-        file.percentage = 0
-      }
-    })*/
 
     // 遍历文件列表进行“预检”
     for (const file of fileList.value) {
@@ -415,18 +407,6 @@ const startUpload = async () => {
       })
 
       let isSecSuccess = false
-
-      /*if (quickCheck.data.data.canPotentiallySecUpload) {
-          // 快检命中，才花时间算全量
-          fileHash = await calculateSha256(file.raw as File, (p) => {
-            file.percentage = Math.floor(p * 0.4); 
-          });
-      } else {
-          // 快检未命中，直接判定无法秒传
-          file.percentage = 40;
-      }*/
-
-      // 2. 发起预检请求（你需要新增这个后端接口）
 
       if (quickCheck.data.data.canPotentiallySecUpload && fileHash) {
         const checkRes = await axios.post('/api/file/sec-upload', {

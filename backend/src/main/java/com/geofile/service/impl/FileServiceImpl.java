@@ -170,14 +170,6 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
                 if (!StringUtils.hasText(batchToken)) {throw new IllegalArgumentException("取件码已过期或不存在");};
                 queryWrapper.eq(File::getUploadToken, batchToken);
             } else {
-                // 无码模式
-//                double latDelta = radius / 111000.0;
-//                double lngDelta = radius / (111000.0 * Math.cos(lat * Math.PI / 180.0));
-//                queryWrapper.between(File::getLocationLat, lat - latDelta, lat + latDelta)
-//                        .between(File::getLocationLng, lng - lngDelta, lng + lngDelta)
-//                        .eq(File::getIsPrivate, 0)
-//                        .isNotNull(File::getLocationLat)
-//                        .isNotNull(File::getLocationLng);
                 // 【无码模式】：核心修改 -> 使用 Redis 获取附近的 Token 集合
                 String geoKey = "file:locations:public";
                 // 1. 定义搜索范围（圆形）

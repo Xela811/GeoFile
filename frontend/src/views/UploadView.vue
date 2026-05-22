@@ -56,190 +56,6 @@
       </template>
     </FileUpload>
 
-    <!-- 私有批次：取件码与文件（本地持久化，可刷新 / 删单文件 / 删整批） -->
-    <!--<el-card v-if="pickupBatches.length > 0" class="pickup-batches-card" shadow="never">
-      <template #header>
-        <div class="pickup-batches-header">
-          <span>我的取件码（本机记录）</span>
-          <el-button type="primary" link :icon="Refresh" @click="refreshAllPickupBatches">
-            全部刷新
-          </el-button>
-        </div>
-      </template>
-      <p class="pickup-batches-hint">
-        仅当您在本浏览器以「私有」模式上传时记录；取件码与后端 Redis
-        一致过期。删除部分文件后点「刷新」可同步列表；「删除整批」将移除该令牌下全部文件并失效取件码。
-      </p>
-      <div v-for="batch in pickupBatches" :key="batch.code" class="pickup-batch-block">
-        <div class="pickup-batch-toolbar">
-          <div class="pickup-code-row">
-            <span class="label">取件码</span>
-            <el-tag type="warning" size="large" effect="dark">{{ batch.code }}</el-tag>
-            <el-button type="primary" link :icon="DocumentCopy" @click="copyPickupCode(batch.code)">
-              复制
-            </el-button>
-            <el-button
-              type="primary"
-              link
-              :icon="Share"
-              @click="openShare(batch.code)"
-              style="margin-left: 12px"
-            >
-              分享
-            </el-button>
-          </div>
-
-          <div class="pickup-meta">
-            <span v-if="batch.validMinutes > 0" class="meta-item">
-              约 {{ formatBatchExpire(batch) }} 失效（按上传时所设有效期估算）
-            </span>
-            <span v-else class="meta-item">未限制时长（仍以服务端为准）</span>
-            <span v-if="batch.lastSyncedAt" class="meta-item subtle">
-              最近同步：{{ formatSyncedAt(batch.lastSyncedAt) }}
-            </span>
-          </div>
-          <div class="pickup-actions">
-            <el-button
-              size="small"
-              :icon="Refresh"
-              :loading="batch.refreshing"
-              @click="refreshPickupBatch(batch)"
-            >
-              刷新列表
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :icon="Delete"
-              @click="confirmDeleteEntireBatch(batch)"
-            >
-              删除整批
-            </el-button>
-          </div>
-        </div>
-        <el-alert v-if="batch.syncError" type="error" :closable="false" class="batch-alert">
-          {{ batch.syncError }}
-        </el-alert>
-        <el-table
-          v-if="batch.files.length > 0"
-          :key="`${batch.code}-${batch.files.length}`"
-          :data="batch.files"
-          size="small"
-          stripe
-          class="pickup-file-table"
-        >
-          <el-table-column prop="fileName" label="文件名" min-width="160" show-overflow-tooltip />
-          <el-table-column label="大小" width="100">
-            <template #default="{ row }">
-              {{ formatFileSize(row.fileSize) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="uploadTime" label="上传时间" width="170" />
-          <el-table-column label="操作" width="100" fixed="right">
-            <template #default="{ row }">
-              <el-button
-                type="danger"
-                link
-                size="small"
-                @click="deleteSingleInBatch(batch, row.id)"
-              >
-                删除
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-else description="暂无文件或正在加载" :image-size="64" />
-      </div>
-    </el-card>
-
-    <el-card v-if="publicBatches.length > 0" class="pickup-batches-card public-batches-card" shadow="never">
-  <template #header>
-    <div class="pickup-batches-header">
-      <span style="color: #67c23a; font-weight: bold;">
-        <el-icon style="vertical-align: middle; margin-right: 4px;"><Share /></el-icon>
-        我的公开分享（地图可见）
-      </span>
-    </div>
-  </template>
-  <p class="pickup-batches-hint">
-    仅记录您在本浏览器上传的「公开」文件。这些文件在地图上对所有人可见（需在您位置 1km 内）。
-    删除整批将使该批次文件从地图上彻底移除。
-  </p>
-
-  <div v-for="batch in publicBatches" :key="batch.uploadToken" class="pickup-batch-block">
-    <div class="pickup-batch-toolbar">
-      <div class="pickup-code-row">
-        <span class="label">管理令牌</span>
-        <el-tag type="success" size="large" effect="plain">
-          {{ batch.uploadToken.substring(0, 12) }}...
-        </el-tag>
-        <el-text type="info" size="small">（公开模式无取件码）</el-text>
-        <el-button
-        type="primary"
-        link
-        :icon="Share"
-        @click="openPublicShare(batch.uploadToken)"
-        style="margin-left: 12px"
-      >
-        分享
-      </el-button>
-      </div>
-
-      <div class="pickup-meta">
-        <span class="meta-item">
-          上传于：{{ formatSyncedAt(batch.createdAt) }}
-        </span>
-        <span v-if="batch.lastSyncedAt" class="meta-item subtle">
-          最近操作：{{ formatSyncedAt(batch.lastSyncedAt) }}
-        </span>
-      </div>
-
-      <div class="pickup-actions">
-        <el-button
-              size="small"
-              :icon="Refresh"
-              :loading="batch.refreshing"
-              @click="refreshPublicBatch(batch)"
-            >
-              刷新列表
-        </el-button>
-        <el-button
-          size="small"
-          type="danger"
-          plain
-          :icon="Delete"
-          @click="confirmDeleteEntirePublicBatch(batch)"
-        >
-          删除整批并从地图下架
-        </el-button>
-      </div>
-    </div>
-
-    <el-table :data="batch.files" size="small" stripe class="pickup-file-table">
-      <el-table-column prop="fileName" label="文件名" min-width="160" show-overflow-tooltip />
-      <el-table-column label="大小" width="100">
-        <template #default="{ row }">
-          {{ formatFileSize(row.fileSize) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="100" fixed="right">
-        <template #default="{ row }">
-          <el-button
-            type="danger"
-            link
-            size="small"
-            @click="deleteSingleInPublicBatch(batch, row.id)"
-          >
-            删除
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-  </div>
-</el-card>-->
-
-    
 <el-card v-if="pickupBatches.length > 0" class="pickup-batches-card" shadow="never">
       <template #header>
         <div class="pickup-batches-header">
@@ -282,7 +98,7 @@
 
               <div class="mobile-first-file-info">
                 <span class="first-file-name" v-if="batch.files && batch.files.length > 0">
-                  {{ batch.files[0].fileName }}
+                  {{ batch.files?.[0]?.fileName }}
                 </span>
                 <el-tag size="small" type="info" class="file-count-tag" v-if="batch.files">
                   等共 {{ batch.files.length }} 个文件
@@ -405,7 +221,7 @@
 
               <div class="mobile-first-file-info">
                 <span class="first-file-name" v-if="batch.files && batch.files.length > 0">
-                  {{ batch.files[0].fileName }}
+                  {{ batch.files?.[0]?.fileName }}
                 </span>
                 <el-tag size="small" type="info" class="file-count-tag" v-if="batch.files">
                   等共 {{ batch.files.length }} 个文件
@@ -561,7 +377,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Back, SuccessFilled, Refresh, DocumentCopy, Delete, FolderOpened } from '@element-plus/icons-vue'
+import { Back, SuccessFilled, Refresh, DocumentCopy, Delete, FolderOpened, Share } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import FileUpload from '@/components/FileUpload.vue'
 import { reconcileMyUploadedFiles } from '@/services/reconcileService'
@@ -699,7 +515,7 @@ const handleUploadSuccess = (files: UploadUserFile[]) => {
 }
 
 // 上传成功回调（包含 uploadToken）；与 FileUpload 对齐：可为 Result{ data }、FileVO[] 或单个 FileVO
-const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; message?: string }, total: number) => {
+const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; message?: string }, total?: number) => {
   console.log('收到上传文件数据:', payload)
 
   const raw = payload && payload.data !== undefined ? payload.data : payload
@@ -736,15 +552,6 @@ const handleFileUploadSuccess = (payload: { code?: number; data?: unknown; messa
     console.warn('上传文件数据不完整:', payload)
   }
 
-  /*if (downloadLimitConfig.value.needCode && items.length > 0) {
-    const first = items[0]
-    if (first?.downloadCode && first?.uploadToken) {
-      upsertPickupBatchFromUpload(first.downloadCode, first.uploadToken, items, total)
-    } else {
-      // 新增：公开模式入库
-      upsertPublicBatchFromUpload(first.uploadToken, items, total)
-    }
-  }*/
   // --- 修改后的逻辑分流 ---
 if (items.length > 0) {
   const first = items[0]
@@ -759,7 +566,7 @@ if (items.length > 0) {
   } else {
     // 2. 公开模式逻辑：只要有 uploadToken 即可入库
     if (first?.uploadToken) {
-      upsertPublicBatchFromUpload(first.uploadToken, items, total)
+      upsertPublicBatchFromUpload(first.uploadToken, items, total ?? 0)
     } else {
       console.warn('公开上传缺少令牌', first)
     }
@@ -808,7 +615,7 @@ function loadPickupBatchesFromStorage(): PickupBatchDisplay[] {
     if (!Array.isArray(parsed)) return []
     return parsed.map((b) => ({
       ...b,
-      files: b.files || [],
+      files: (b as any).files || [],
       lastSyncedAt: null,
       syncError: null,
       refreshing: false,
@@ -827,7 +634,7 @@ function loadPublicBatchesFromStorage(): PickupBatchDisplay[] {
     if (!Array.isArray(parsed)) return []
     return parsed.map((b) => ({
       ...b,
-      files: b.files || [],
+      files: (b as any).files || [],
       lastSyncedAt: null,
       syncError: null,
       refreshing: false,
@@ -852,11 +659,11 @@ function mapVoToRow(
 }
 
 // 在 UploadView.vue 中定义一个闭包变量
-let uploadNoticeTimer = null;
+let uploadNoticeTimer: any = null;
 let pendingFilesCount = 0;
 let processedTaskCount = 0; // 记录已处理的文件坑位
 
-function upsertPickupBatchFromUpload(code, uploadToken, items, totalInBatch) {
+function upsertPickupBatchFromUpload(code: any, uploadToken: any, items: any, totalInBatch: any) {
   const dataItems = Array.isArray(items) ? items : [items];
   processedTaskCount += dataItems.length;
   const validMinutes = downloadLimitConfig.value.validMinutes;
@@ -871,8 +678,8 @@ function upsertPickupBatchFromUpload(code, uploadToken, items, totalInBatch) {
     // 累加模式：将新来的 items 合并到现有 files 中，去重
     //const newMappedFiles = items.map(x => mapVoToRow(x));
     newMappedFiles.forEach(nf => {
-        if (!existing.files.find(f => f.id === nf.id)) {
-            existing.files.push(nf);
+        if (!existing!.files.find(f => f.id === nf.id)) {
+            existing!.files.push(nf);
             addedCount++;
         }
     });
@@ -934,8 +741,8 @@ function upsertPublicBatchFromUpload(uploadToken: string, items: any[], totalInB
   
   if (existing) {
     newMappedFiles.forEach(nf => {
-      if (!existing.files.find(f => f.id === nf.id)) {
-        existing.files.push(nf)
+      if (!existing!.files.find(f => f.id === nf.id)) {
+        existing!.files.push(nf)
       }
     })
     existing.lastSyncedAt = Date.now()
@@ -1028,7 +835,7 @@ async function refreshPublicBatch(batch: PickupBatchDisplay) {
         publicBatches.value = publicBatches.value.filter(b => b.uploadToken !== batch.uploadToken)
         savePublicBatchesToStorage()
       } else {
-        batch.files = json.data.map(x => mapVoToRow(x))
+        batch.files = json.data.map((x: any) => mapVoToRow(x))
         savePublicBatchesToStorage()
       }
     }
@@ -1181,7 +988,7 @@ async function deleteSingleInPublicBatch(batch: PickupBatchDisplay, fileId: numb
 // 公开批次的整批删除
 async function confirmDeleteEntirePublicBatch(batch: PickupBatchDisplay) {
   try {
-    await ElMessageBox.confirm('确定删除该批次所有公开文件？', '警告', { type: 'danger' })
+    await ElMessageBox.confirm('确定删除该批次所有公开文件？', '警告', { type: 'error' })
     const res = await fetch(`/api/file/batch-by-upload-token?uploadToken=${encodeURIComponent(batch.uploadToken)}`, { method: 'DELETE' })
     const json = await res.json()
     if (json.code === 200) {
@@ -1207,7 +1014,7 @@ async function reconcilePublicBatches() {
       // 如果后端返回 200 且有数据，保留；否则标记为需要删除
       if (json.code === 200 && Array.isArray(json.data) && json.data.length > 0) {
         // 顺便更新一下最新的文件状态（比如下载次数）
-        batch.files = json.data.map(x => mapVoToRow(x));
+        batch.files = json.data.map((x: any) => mapVoToRow(x));
         validBatches.push(batch);
       } else {
         changed = true;
@@ -1393,7 +1200,7 @@ const handleUploadError = (error: Error) => {
   }
 }
 
-// 🌟【新增】专门处理一长行折叠头的 Flex 布局控制
+// 【新增】专门处理一长行折叠头的 Flex 布局控制
 .pickup-batch-header-trigger {
   display: flex;
   align-items: center;
@@ -1404,14 +1211,14 @@ const handleUploadError = (error: Error) => {
   overflow: hidden;
 }
 
-// 🌟【新增】小图标美化
+// 【新增】小图标美化
 .batch-folder-icon {
   font-size: 16px;
   color: #e6a23c;
   flex-shrink: 0;
 }
 
-// 🌟【新增】移动端/折叠状态下第一个文件名显示的裁切规范
+// 【新增】移动端/折叠状态下第一个文件名显示的裁切规范
 .mobile-first-file-info {
   display: flex;
   align-items: center;
@@ -1492,7 +1299,7 @@ const handleUploadError = (error: Error) => {
   width: 100%;
 }
 
-// 🌟【新增】手机响应式断点适配：大幅节省屏幕垂直与水平空间
+// 【新增】手机响应式断点适配：大幅节省屏幕垂直与水平空间
 @media (max-width: 768px) {
   .pickup-batch-content-body {
     padding: 4px 4px 12px 4px; // 手机端让出左边距
