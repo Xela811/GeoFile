@@ -17,7 +17,7 @@
       </div>
 
       <!-- 模式切换 -->
-      <div class="mode-switch">
+      <!--<div class="mode-switch">
         <el-switch
           v-model="useFixedCoordinates"
           active-text="使用固定坐标"
@@ -32,7 +32,7 @@
         >
           {{ useFixedCoordinates ? '开发测试模式' : '生产模式' }}
         </el-tag>
-      </div>
+      </div>-->
 
       <el-card class="location-card" v-loading="locationLoading">
         <template #header>
@@ -634,7 +634,7 @@ const currentDownloadUrl = computed(() => {
 // 获取坐标（支持开发测试使用固定坐标）
 const getCoordinates = async (): Promise<{ lat: number; lng: number }> => {
   // 开发测试模式：使用固定坐标
-  if (useFixedCoordinates.value) {
+  if (useFixedCoordinates.value && false) {
     console.log('使用固定测试坐标:', { lat: FIXED_LAT, lng: FIXED_LNG })
     return { lat: FIXED_LAT, lng: FIXED_LNG }
   }
@@ -653,7 +653,7 @@ const handleGetCurrentLocation = async () => {
     if (useFixedCoordinates.value) {
       ElMessage.info('开发测试模式：使用固定坐标')
     } else {
-      ElMessage.info('生产模式：使用实际GPS坐标')
+      ElMessage.info('使用实际GPS坐标')
     }
 
     // 1. 获取经纬度坐标（使用固定的或实际的）

@@ -26,6 +26,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // 公开接口（不需要验证）
                 .requestMatchers(
+                        "/api/",
                     "/api/verification/**",           // 验证码相关接口
                     "/api/verification/captcha",       // 获取验证码图片
                     "/api/verification/send",          // 发送验证码

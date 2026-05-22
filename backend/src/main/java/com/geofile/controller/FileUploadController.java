@@ -406,7 +406,7 @@ public class FileUploadController {
         try {
             // 对中文消息进行编码，防止 URL 乱码
             String encodedMsg = URLEncoder.encode(message, StandardCharsets.UTF_8);
-            String targetUrl = "http://localhost:5173/error?msg=" + encodedMsg;
+            String targetUrl = "http://localhost:9000/error?msg=" + encodedMsg;
 
             log.info("重定向至错误页: {}", targetUrl);
 

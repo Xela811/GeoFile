@@ -11,7 +11,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.TimeZone;
 
-@SpringBootApplication(exclude = {SecurityAutoConfiguration.class})
+@SpringBootApplication
 @MapperScan("com.geofile.mapper")
 @ComponentScan("com.geofile")  // 明确指定扫描包
 @EnableScheduling
