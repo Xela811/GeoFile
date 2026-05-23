@@ -2,7 +2,6 @@ package com.geofile.task;
 
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.geofile.entity.File;
 import com.geofile.entity.FileHash;
 import com.geofile.service.FileHashService;
@@ -14,8 +13,13 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Stream;
 
 @Component
 @Slf4j
@@ -32,12 +36,20 @@ public class FileLifecycleTask {
     @Value("${file.upload.path}")
     private String uploadPath;
 
+    private static final long MAX_STORAGE_BYTES = 20L * 1024 * 1024 * 1024;
+
     /**
      * 每分钟扫描一次过期文件
      * cron: 秒 分 时 日 月 周
      */
     @Scheduled(cron = "0 0/15 * * * ?")
     public void handleFileExpiration() {
+
+        try {
+            checkAndEvictFilesByCapacity();
+        } catch (Exception e) {
+            log.error("执行存储容量控制淘汰失败", e);
+        }
 
         Date now = new Date();
 
@@ -99,6 +111,112 @@ public class FileLifecycleTask {
             }
         }
         log.info("定时任务完成：处理了 {} 个过期/满额文件", expiringFiles.size());
+    }
+
+    private void checkAndEvictFilesByCapacity() {
+        Path folder = Paths.get(uploadPath);
+        if (!Files.exists(folder)) return;
+
+        long currentSizeOfFiles = 0;
+        try (Stream<Path> walk = Files.walk(folder)) {
+            currentSizeOfFiles = walk.filter(Files::isRegularFile)
+                    .mapToLong(p -> p.toFile().length())
+                    .sum();
+        } catch (IOException e) {
+            log.error("计算上传目录大小失败", e);
+            return;
+        }
+
+        log.info("当前存储占用: {} MB / 阈值: {} MB", currentSizeOfFiles / 1024 / 1024, MAX_STORAGE_BYTES / 1024 / 1024);
+
+        if (currentSizeOfFiles <= MAX_STORAGE_BYTES) {
+            return;
+        }
+
+        long bytesToFree = currentSizeOfFiles - MAX_STORAGE_BYTES;
+        log.warn("存储空间超限！需要释放至少 {} MB 空间", bytesToFree / 1024 / 1024);
+
+        // ==========================================
+        //  阶段一：优先物理清理【引用计数为0】的闲置文件（废物利用）
+        // ==========================================
+        List<FileHash> garbageList = fileHashService.list(new LambdaQueryWrapper<FileHash>()
+                .eq(FileHash::getReferenceCount, 0)
+                .eq(FileHash::getStatus, 0)
+                .orderByAsc(FileHash::getUpdatedTime)); // 从最老被删的记录开始清
+
+        for (FileHash hashRecord : garbageList) {
+            if (bytesToFree <= 0) break; // 空间够了，提早退出
+
+            try {
+                Path path = Paths.get(uploadPath, hashRecord.getStoragePath());
+                long fileSize = Files.exists(path) ? Files.size(path) : 0;
+
+                boolean deleted = Files.deleteIfExists(path);
+                if (deleted || fileSize == 0) {
+                    fileHashService.removeById(hashRecord.getId());
+                    bytesToFree -= fileSize; // 扣减还需要释放的空间
+                    log.info("容量限制-[优先强清无引用垃圾]: 物理路径={}, 释放空间={} MB", path, fileSize / 1024 / 1024);
+                }
+            } catch (Exception e) {
+                log.error("容量限制-强清无引用垃圾失败: hash={}", hashRecord.getFileHash(), e);
+            }
+        }
+
+        // 如果清理完无引用的死文件后，空间已经腾出来了，直接皆大欢喜，打道回府！
+        if (bytesToFree <= 0) {
+            log.info("通过物理清理闲置垃圾文件，成功将空间拉回安全线以内。");
+            return;
+        }
+
+        // ==========================================
+        //  阶段二：迫不得已，淘汰【正常在线】的最老文件（兜底防线）
+        // ==========================================
+        log.warn("清理完闲置垃圾后空间仍不足，开始强制下线正常文件，仍需释放: {} MB", bytesToFree / 1024 / 1024);
+
+        List<File> activeFiles = fileService.list(new LambdaQueryWrapper<File>()
+                .eq(File::getStatus, 1)
+                .eq(File::getDeleted, 0)
+                .orderByAsc(File::getCreatedTime)
+        );
+
+        Set<String> tokensToCheck = new HashSet<>();
+
+        for (File f : activeFiles) {
+            if (bytesToFree <= 0) break;
+
+            try {
+                if (f.getFileHash() != null) {
+                    fileHashService.decrementReference(f.getFileHash());
+                }
+
+                f.setStatus(2);
+                f.setDeleted(1);
+                fileService.updateById(f);
+
+                if (f.getUploadToken() != null) {
+                    tokensToCheck.add(f.getUploadToken());
+                }
+
+                if (f.getFileSize() != null) {
+                    bytesToFree -= f.getFileSize();
+                }
+                log.info("容量限制-[被迫牺牲在线文件]: id={}, fileName={}, size={} MB", f.getId(), f.getFileName(), f.getFileSize() / 1024 / 1024);
+
+            } catch (Exception e) {
+                log.error("容量淘汰正常文件失败: fileId={}", f.getId(), e);
+            }
+        }
+
+        // 同步清理 GEO 索引
+        for (String token : tokensToCheck) {
+            long aliveCount = fileService.count(new LambdaQueryWrapper<File>()
+                    .eq(File::getUploadToken, token)
+                    .in(File::getStatus, Arrays.asList(1, 3))
+                    .eq(File::getDeleted, 0));
+            if (aliveCount == 0) {
+                redisTemplate.opsForZSet().remove("file:locations:public", token);
+            }
+        }
     }
 
     /**

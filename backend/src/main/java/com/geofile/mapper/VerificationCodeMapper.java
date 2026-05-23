@@ -1,7 +1,7 @@
 package com.geofile.mapper;
 
-import com.geofile.entity.VerificationCode;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.geofile.entity.VerificationCode;
 
 /**
 * @author xela

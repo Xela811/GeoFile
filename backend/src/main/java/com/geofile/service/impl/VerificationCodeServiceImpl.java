@@ -1,24 +1,18 @@
 package com.geofile.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.geofile.entity.VerificationCode;
-import com.geofile.service.VerificationCodeService;
-import com.geofile.mapper.VerificationCodeMapper;
-import com.geofile.util.JwtUtil;
-import com.geofile.util.RedisUtil;
 import cn.hutool.captcha.CaptchaUtil;
 import cn.hutool.captcha.LineCaptcha;
 import cn.hutool.captcha.generator.RandomGenerator;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.geofile.entity.VerificationCode;
+import com.geofile.mapper.VerificationCodeMapper;
+import com.geofile.service.VerificationCodeService;
+import com.geofile.util.RedisUtil;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**

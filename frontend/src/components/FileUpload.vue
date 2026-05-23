@@ -251,7 +251,7 @@ const allowedTypes = [
   'csv',
 ]
 const FORBIDDEN_EXTS = ['jsp', 'php', 'asp', 'aspx', 'sh', 'py', 'bat']
-const maxSize = 5 * 1024 * 1024 * 1024 // 5GB
+const maxSize = 3 * 1024 * 1024 * 1024 // 3GB
 
 // 处理文件选择
 const handleFileChange = (file: UploadUserFile) => {
@@ -272,7 +272,7 @@ const handleFileChange = (file: UploadUserFile) => {
 
   // --- 逻辑 B: 大小硬性拦截 ---
   if (file.size && file.size > maxSize) {
-    ElMessage.error('文件大小超过限制（5GB）')
+    ElMessage.error('文件大小超过限制（3GB）')
 
     const index = fileList.value.findIndex((f) => f.uid === file.uid)
     if (index !== -1) {

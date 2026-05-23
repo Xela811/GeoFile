@@ -1,10 +1,9 @@
 package com.geofile.mapper;
 
-import com.geofile.entity.File;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.geofile.entity.File;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 

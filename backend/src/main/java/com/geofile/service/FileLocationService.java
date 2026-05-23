@@ -1,9 +1,7 @@
 package com.geofile.service;
 
-import com.geofile.entity.File;
-import com.geofile.entity.FileVO;
 import com.baomidou.mybatisplus.extension.service.IService;
-import java.util.List;
+import com.geofile.entity.File;
 
 /**
  * 文件地理位置服务

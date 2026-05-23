@@ -25,7 +25,7 @@ public class FileStorageServiceImpl implements FileStorageService {
 
     private static final Logger logger = LoggerFactory.getLogger(FileStorageServiceImpl.class);
 
-    @Value("${file.upload.path:/home/xela/Projects/GeoFile/uploads}")
+    @Value("${file.upload.path}")
     private String uploadPath;
 
     /**

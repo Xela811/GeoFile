@@ -4,10 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.geofile.dto.SecUploadDTO;
 import com.geofile.entity.*;
+import com.geofile.exception.DownloadException;
 import com.geofile.mapper.FileMapper;
 import com.geofile.service.*;
 import com.geofile.util.*;
-import com.geofile.exception.DownloadException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,18 +18,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -69,7 +64,7 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Autowired
     private FileHashService fileHashService;
 
-    @Value("${file.upload.path:/home/xela/Projects/GeoFile/uploads}")
+    @Value("${file.upload.path}")
     private String uploadPath;
 
     @Autowired

@@ -1,5 +1,6 @@
 package com.geofile.service.impl;
 
+import cn.hutool.core.util.CoordinateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -8,7 +9,6 @@ import com.geofile.service.AmapService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import cn.hutool.core.util.CoordinateUtil;
 
 import java.util.ArrayList;
 import java.util.List;

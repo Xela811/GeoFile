@@ -2,8 +2,9 @@ package com.geofile.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
-import java.time.LocalDateTime;
+
 import java.io.Serializable;
+import java.time.LocalDateTime;
 
 /**
  * 文件上传批次增强索引表
