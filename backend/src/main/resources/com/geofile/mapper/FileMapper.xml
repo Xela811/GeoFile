@@ -27,6 +27,7 @@
             <result property="deleted" column="deleted" />
     </resultMap>
 
+    <!--suppress Annotator -->
     <sql id="Base_Column_List">
         id,file_name,file_type,file_size,file_path,original_name,
         storage_type,upload_time,expire_time,download_count,status,

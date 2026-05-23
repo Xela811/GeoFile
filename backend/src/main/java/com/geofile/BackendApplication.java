@@ -11,7 +11,6 @@ import java.util.TimeZone;
 
 @SpringBootApplication
 @MapperScan("com.geofile.mapper")
-@ComponentScan("com.geofile")  // 明确指定扫描包
 @EnableScheduling
 public class BackendApplication {
 
