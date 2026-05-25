@@ -86,7 +86,7 @@ public class AmapServiceImpl implements AmapService {
 
             // 2. 发送 GET 请求
             // 使用 Hutool 的 HttpUtil
-            String response = cn.hutool.http.HttpUtil.get(url);
+            String response = cn.hutool.http.HttpUtil.get(url, 3000);
 
             log.debug("高德地图逆地理编码响应: {}", response);
 
@@ -95,10 +95,11 @@ public class AmapServiceImpl implements AmapService {
 
             // 4. 检查响应状态
             if (!"1".equals(jsonResponse.getString("status"))) {
-                String info = jsonResponse.getString("info");
-                String infocode = jsonResponse.getString("infocode");
-                log.error("高德地图逆地理编码失败: info={}, infocode={}", info, infocode);
-                throw new RuntimeException("逆地理编码失败: " + info + " (" + infocode + ")");
+                //String info = jsonResponse.getString("info");
+                //String infocode = jsonResponse.getString("infocode");
+                //log.error("高德地图逆地理编码失败: info={}, infocode={}", info, infocode);
+                //throw new RuntimeException("逆地理编码失败: " + info + " (" + infocode + ")");
+                throw new RuntimeException("高德状态码返回失败");
             }
 
             // 5. 提取地址信息
@@ -132,12 +133,29 @@ public class AmapServiceImpl implements AmapService {
             addressInfo.setAddressComponent(component);
             addressInfo.setCoordinate(new CoordinateUtil.Coordinate(lng, lat));
 
-            log.info("逆地理编码成功: {}", addressInfo.getFormattedAddress());
+            //log.info("逆地理编码成功: {}", addressInfo.getFormattedAddress());
             return addressInfo;
 
         } catch (Exception e) {
-            log.error("逆地理编码异常", e);
-            throw new RuntimeException("逆地理编码失败: " + e.getMessage(), e);
+            //log.error("逆地理编码异常", e);
+            //throw new RuntimeException("逆地理编码失败: " + e.getMessage(), e);
+            // 2. 如果首尔连国内高德超时或抛出任何异常，在这里直接实施熔断降级！
+            log.warn("高德逆地理编码在跨境网络下触发超时或异常，已启动平稳降级保护: {}", e.getMessage());
+
+            // 构造一个不带详细街道、但拥有精准 GPS 坐标的保底对象返回，绝对不让接口报 504
+            AddressInfo fallbackInfo = new AddressInfo();
+            fallbackInfo.setFormattedAddress("未解析到具体街道");
+
+            AddressComponent fallbackComponent = new AddressComponent();
+            fallbackComponent.setProvince("未知省份");
+            fallbackComponent.setCity("定位成功"); // 告诉前端，坐标其实拿到了
+            fallbackComponent.setDistrict("");
+            fallbackComponent.setTownship("");
+
+            fallbackInfo.setAddressComponent(fallbackComponent);
+            fallbackInfo.setCoordinate(new CoordinateUtil.Coordinate(lng, lat));
+
+            return fallbackInfo;
         }
     }
 

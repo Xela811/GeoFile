@@ -130,9 +130,9 @@ class LocationService {
           reject(new Error(errorMessage))
         },
         {
-          enableHighAccuracy: false, // 启用高精度定位
-          timeout: 5000, // 超时时间5秒
-          maximumAge: 60000, // 不使用缓存的位置
+          enableHighAccuracy: true, // 启用高精度定位
+          timeout: 15000, // 超时时间15秒
+          maximumAge: 0, // 不使用缓存的位置
         },
       )
     })

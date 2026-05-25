@@ -79,6 +79,8 @@ public class FileUploadServiceImpl implements FileUploadService {
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> downloadDebounceMap = new java.util.concurrent.ConcurrentHashMap<>();
+
     @Override
     @Transactional
     public FileVO uploadFile(MultipartFile file, Integer maxDownloads, Integer validMinutes, Boolean needCode) {
@@ -501,36 +503,38 @@ public class FileUploadServiceImpl implements FileUploadService {
                     new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
             );
 
-            // 5. 核心逻辑：执行下载计数
-            int currentCount = (file.getDownloadCount() == null) ? 0 : file.getDownloadCount();
-            int maxDownloads = (downloadLimit != null) ? downloadLimit.getMaxDownloads() : 0;
 
-            // 如果当前状态已经是 3，说明在残影期，拦截下载
-            if (file.getStatus() != null && file.getStatus() == 3) {
-                throw new DownloadException("该文件下载次数已达上限");
-            }
+                // 5. 核心逻辑：执行下载计数
+                int currentCount = (file.getDownloadCount() == null) ? 0 : file.getDownloadCount();
+                int maxDownloads = (downloadLimit != null) ? downloadLimit.getMaxDownloads() : 0;
 
-            // 二次检查（防御式编程）：防止并发情况下漏掉的状态
-            if (maxDownloads > 0 && currentCount >= maxDownloads) {
-                throw new DownloadException("该文件的下载次数已达上限");
-            }
+                // 如果当前状态已经是 3，说明在残影期，拦截下载
+                if (file.getStatus() != null && file.getStatus() == 3) {
+                    throw new DownloadException("该文件下载次数已达上限");
+                }
 
-            // 正常计数更新
-            int nextCount = currentCount + 1;
-            file.setDownloadCount(nextCount);
+                // 二次检查（防御式编程）：防止并发情况下漏掉的状态
+                if (maxDownloads > 0 && currentCount >= maxDownloads) {
+                    throw new DownloadException("该文件的下载次数已达上限");
+                }
 
-            // 如果这一次刚好下满
-            if (maxDownloads > 0 && nextCount >= maxDownloads) {
-                // 关键点：设置为 3，表示“已满额但仍需展示”
-                file.setStatus(3);
-                log.info("文件 {} 已达到最大下载次数", fileId);
-            }
+                // 正常计数更新
+                int nextCount = currentCount + 1;
+                file.setDownloadCount(nextCount);
 
-            // 6. 保存到数据库
-            fileService.updateById(file);
+                // 如果这一次刚好下满
+                if (maxDownloads > 0 && nextCount >= maxDownloads) {
+                    // 关键点：设置为 3，表示“已满额但仍需展示”
+                    file.setStatus(3);
+                    log.info("文件 {} 已达到最大下载次数", fileId);
+                }
+
+                // 6. 保存到数据库
+                fileService.updateById(file);
 
 
-            log.info("文件下载成功: fileId={}, fileName={}, 下载次数={}", fileId, file.getFileName(), file.getDownloadCount());
+                log.info("文件下载成功: fileId={}, fileName={}, 下载次数={}", fileId, file.getFileName(), file.getDownloadCount());
+
 
             return file;
 

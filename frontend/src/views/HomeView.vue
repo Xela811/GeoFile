@@ -44,7 +44,7 @@
               :loading="locationLoading"
               @click="handleGetCurrentLocation"
             >
-              {{ locationInfo ? '刷新地理位置' : '扫瞄当前位置' }}
+              {{ locationInfo ? '刷新地理位置' : '扫描当前位置' }}
             </el-button>
           </div>
         </template>
@@ -179,7 +179,7 @@
                 type="primary"
                 size="small"
                 :icon="Download"
-                :disabled="isBtnDisabled(file)"
+                :disabled="isBtnDisabled(file) || isQuickDownloading"
                 @click.stop="handleQuickDownload(file)"
               >
                 下载文件
@@ -280,7 +280,7 @@
                     formatFileSize(activeFile?.fileSize ?? 0)
                   }}</el-descriptions-item>
                 </el-descriptions>
-                <el-button type="primary" size="large" @click="downloadFileFromPreview">
+                <el-button type="primary" size="large" :disabled="isPreviewDownloading" @click="downloadFileFromPreview">
                   立即下载
                 </el-button>
               </div>
@@ -288,7 +288,7 @@
 
             <el-result v-else icon="warning" title="当前格式不支持在线预览">
               <template #extra>
-                <el-button type="primary" @click="downloadFileFromPreview">下载原文件</el-button>
+                <el-button type="primary" :disabled="isPreviewDownloading" @click="downloadFileFromPreview">下载原文件</el-button>
               </template>
             </el-result>
           </div>
@@ -458,7 +458,7 @@
               type="primary"
               size="large"
               @click="downloadFile"
-              :disabled="isFileExpiredRealtime || isMaxedOut || selectedFile?.distanceExceeded"
+              :disabled="isFileExpiredRealtime || isMaxedOut || selectedFile?.distanceExceeded || isDetailDownloading"
             >
               <el-icon><Download /></el-icon>
               {{
@@ -612,6 +612,11 @@ const selectedFile = ref<NearbyFile | null>(null)
 const LOCK_ICON = 'https://api.iconify.design/ep:lock.svg?color=%2367c23a' // 绿色锁
 const LOCATION_ICON = 'https://api.iconify.design/ep:location.svg?color=%23e6a23c' // 橙色定位针
 
+// 为不同的下载点击动作准备各自的 5 秒锁状态
+const isQuickDownloading = ref(false)     // 对应列表快捷下载按钮
+const isPreviewDownloading = ref(false)   // 对应预览页/弹窗里的下载原文件/立即下载
+const isDetailDownloading = ref(false)    // 对应详情页底部的那个大按钮
+
 // 计算当前选中文件的下载链接
 const currentDownloadUrl = computed(() => {
   if (!selectedFile.value) return ''
@@ -646,7 +651,7 @@ const getCoordinates = async (): Promise<{ lat: number; lng: number }> => {
 }
 
 // 获取当前位置
-const handleGetCurrentLocation = async () => {
+const handleGetCurrentLocation = async (autoSearch = true) => {
   try {
     locationLoading.value = true
 
@@ -684,9 +689,12 @@ const handleGetCurrentLocation = async () => {
 
     // 4. 保存到localStorage
     localStorage.setItem('userLocation', JSON.stringify(locationInfo.value))
-
+    if(autoSearch){
     ElMessage.success('位置信息获取成功')
     handleSearch()
+    }else{
+      console.log('静默定位')
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '获取位置失败')
     console.error('获取位置失败', error)
@@ -1177,13 +1185,17 @@ const viewFileDetail = async (file: NearbyFile) => {
 
 // 快速下载逻辑
 const handleQuickDownload = (file: any) => {
+  if(isQuickDownloading.value) return
+  isQuickDownloading.value = true
   if (file.distanceExceeded) {
     ElMessage.error('由于距离超过1km，无法进行快速下载')
+    isQuickDownloading.value = false // 拦截时立刻解封
     return
   }
 
   if (isBtnDisabled(file)) {
     ElMessage.error('文件已失效或达到下载上限')
+    isQuickDownloading.value = false
     return
   }
 
@@ -1191,6 +1203,9 @@ const handleQuickDownload = (file: any) => {
   nextTick(() => {
     downloadFile() // 直接调用你代码中已有的 downloadFile 方法
   })
+  setTimeout(() => {
+    isQuickDownloading.value = false
+  }, 5000)
 }
 
 // 统一判定函数，确保列表按钮和详情按钮逻辑一致
@@ -1221,10 +1236,12 @@ const getPosParams = () => {
 
 // 下载文件
 const downloadFile = async () => {
-  
+  if (isDetailDownloading.value) return
+  isDetailDownloading.value = true
   // 1. 基础校验
   if (!selectedFile.value) {
     ElMessage.warning('请先选择一个文件')
+    isDetailDownloading.value = false
     return
   }
 
@@ -1238,6 +1255,9 @@ const downloadFile = async () => {
       // 拦截超距
       if (selectedFile.value!.distanceExceeded) {
         ElMessage.error('当前距离已超出1km限制，已被服务器拒绝下载')
+        setTimeout(() => {
+      isDetailDownloading.value = false
+    }, 5000)
         return
       }
 
@@ -1247,6 +1267,9 @@ const downloadFile = async () => {
         (selectedFile.value!.downloadCount ?? 0) >= (selectedFile.value!.maxDownloads ?? 0)
       ) {
         ElMessage.error('该文件刚刚已达到下载次数上限')
+        setTimeout(() => {
+      isDetailDownloading.value = false
+    }, 5000)
         return
       }
     }
@@ -1260,6 +1283,7 @@ const downloadFile = async () => {
 
   if (!token) {
     ElMessage.error('该文件缺少下载凭证，请刷新列表重试')
+    isDetailDownloading.value = false
     return
   }
 
@@ -1288,6 +1312,90 @@ const downloadFile = async () => {
 
     console.log('实际请求的下载 URL 完整参数为:', params.toString())
 
+    // ==================== ️ 核心修改：多端兼容 ====================
+    
+    // 1. 精准识别恶劣的移动端环境
+    const ua = navigator.userAgent.toLowerCase()
+    //  国际主流标准派
+const isChrome = ua.includes('chrome') && !ua.includes('chromium') && !ua.includes('edge') && !ua.includes('edg')
+const isFirefox = ua.includes('firefox')
+const isEdge = ua.includes('edge') || ua.includes('edg')
+const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+
+//  国内主流第三方独立浏览器（包含你之前提到的）
+const isQuark = ua.includes('quark')        // 夸克
+const isVia = ua.includes('via')            // Via
+const isUC = ua.includes('ucbrowser')       // UC
+const isQQ = ua.includes('mqqbrowser')      // QQ浏览器 (注意：MQQBrowser是QQ浏览器，MicroMessenger是微信)
+const isBaidu = ua.includes('baiduboxapp') || ua.includes('baidubrowser') // 百度
+
+//  新增：国内手机厂商自带原生浏览器派
+const isXiaomi = ua.includes('miuibrowser') // 小米/红米自带
+const isHuawei = ua.includes('huaweibrowser') || ua.includes('honorbrowser') // 华为/荣耀自带
+const isOppo = ua.includes('heytapbrowser') // OPPO自带
+const isVivo = ua.includes('vivobrowser')   // Vivo自带
+
+//  新增：超级 App 内嵌生态派（地狱级拦截重灾区）
+const isWeChat = ua.includes('micromessenger') // 微信内置浏览器
+const isWeibo = ua.includes('weibo')           // 微博内置浏览器
+
+//  综合环境大归类（用于一刀切逻辑）
+const isIOS = /ipad|iphone|ipod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
+const isChallengingMobileEnv = 
+  isIOS || 
+  isSafari || 
+  isQuark || 
+  isVia || 
+  isUC || 
+  isQQ || 
+  isBaidu || 
+  isXiaomi || 
+  isHuawei || 
+  isOppo || 
+  isVivo || 
+  isWeChat || 
+  isWeibo
+    // 2. 如果是 Via / Safari / 夸克 / iOS 环境，果断放弃 fetch Blob
+    if (isChallengingMobileEnv) {
+      ElMessage.success('已成功拉起系统下载管理器')
+
+      if (isWeChat) {
+    ElMessage.warning('如果下载未触发，请点击右上角选择“在浏览器中打开”')
+  }
+
+      //  核心大招：利用当前窗口就地重定向！
+      // 只要后端 Response Header 配置了 Content-Disposition: attachment
+      // 夸克绝对不会弹窗拦截“允许新链接打开”！Safari 也绝对不会触发 load failed！
+      // 它们会在当前页感知到文件流，直接唤起浏览器底层的原生下载器！
+      //window.location.href = `/api/file/download/${fileId}?${params.toString()}`
+
+      setTimeout(() => {
+        window.location.href = `/api/file/download/${fileId}?${params.toString()}`
+      }, 50)
+      // 修正 ：闭包锁死当前文件 ID，防止用户切页面导致 selectedFile 变成 null 报错
+      const savedFileId = fileId
+
+      // 3秒后偷偷拉取一次最新计数，更新前端界面
+      setTimeout(async () => {
+       try {
+        const finalRes = await fetch(`/api/file/detail/${savedFileId}`)
+        const finalData = await finalRes.json()
+        if (finalData.code === 200 && selectedFile.value && selectedFile.value.id === savedFileId) {
+          selectedFile.value = finalData.data
+        }
+      }catch (err) {
+          console.error('移动端异步同步计数失败:', err)
+      }
+        }, 6000)
+      
+        setTimeout(() => {
+      isDetailDownloading.value = false
+    }, 5000)
+
+      return // 移动端逻辑到此完美闭环，提前退出
+    }
+
     // 3. 使用 fetch 获取文件，这样可以捕获错误
     const response = await fetch(`/api/file/download/${fileId}?${params.toString()}`)
 
@@ -1302,6 +1410,7 @@ const downloadFile = async () => {
       } else {
         ElMessage.error(`下载失败: ${response.status} ${response.statusText}`)
       }
+      isDetailDownloading.value = false
       return
     }
 
@@ -1316,10 +1425,11 @@ const downloadFile = async () => {
     document.body.appendChild(a)
     a.click()
 
-    // 6. 清理
+    // 6. 清理, 延时几百毫秒再销毁，防止浏览器还没来得及下载
+    setTimeout(() => {
     window.URL.revokeObjectURL(url)
     document.body.removeChild(a)
-
+    },250)
     ElMessage.success('下载成功')
 
     // 不要手动 += 1，而是直接请求后端拿最权威的数据
@@ -1328,6 +1438,10 @@ const downloadFile = async () => {
     if (finalData.code === 200) {
       selectedFile.value = finalData.data
     }
+
+    setTimeout(() => {
+      isDetailDownloading.value = false
+    }, 5000)
 
   } catch (error: any) {
     console.error('下载文件失败:', error)
@@ -1344,6 +1458,9 @@ const downloadFile = async () => {
     } else {
       ElMessage.error('下载失败: ' + (error.message || '未知错误'))
     }
+    setTimeout(() => {
+      isDetailDownloading.value = false
+    }, 5000)
   }
 }
 
@@ -1626,7 +1743,7 @@ onUnmounted(() => {
 })
 
 // 初始化
-onMounted(() => {
+onMounted(async () => {
   console.log('首页初始化...')
 
   const path = window.location.hash || window.location.pathname
@@ -1663,8 +1780,14 @@ onMounted(() => {
       ElMessage.warning('读取位置信息失败，请重新获取位置')
     }
   } else {
+    if(isSharing)
+    {
+      console.log('检测到分享链接进站且无缓存，全自动静默获取位置')
+      await handleGetCurrentLocation(false)
+    } else {
     console.log('localStorage中没有位置信息')
     ElMessage.info('请先获取当前位置')
+    }
   }
 })
 
@@ -1966,12 +2089,19 @@ const handlePreview = async (file: NearbyFile) => {
 
 // 预览窗口内的快捷下载
 const downloadFileFromPreview = () => {
+  if (isPreviewDownloading.value) return
+  isPreviewDownloading.value = true
   if (activeFile.value) {
     // 逻辑：关闭预览，开启详情弹窗来触发下载（或者直接调用你的 downloadFile）
     previewVisible.value = false
     selectedFile.value = activeFile.value
     downloadFile()
+  } else {
+    isPreviewDownloading.value = false // 🌟 补上：如果没有活跃文件，直接原地解封
   }
+  setTimeout(() => {
+    isPreviewDownloading.value = false
+  }, 5000)
 }
 
 const archiveTree = ref<any[]>([])

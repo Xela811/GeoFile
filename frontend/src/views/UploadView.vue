@@ -32,7 +32,7 @@
       :max-downloads="downloadLimitConfig.maxDownloads"
       :valid-minutes="downloadLimitConfig.validMinutes"
       :need-code="downloadLimitConfig.needCode"
-      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 5GB，单次上传文件数量上限50"
+      tip="支持 JPG、PNG、PDF、DOC、DOCX、XLS、XLSX 等格式，单个文件不超过 3GB，单次上传文件数量上限50"
       @success="handleUploadSuccess"
       @upload-success="handleFileUploadSuccess"
       @error="handleUploadError"
@@ -113,6 +113,13 @@
               </div>
             </div>
           </template>
+          <template #icon="{ isActive }">
+    <span class="click-trigger-text">
+      {{ isActive ? '收起' : '展开' }}
+    </span>
+  </template>
+          
+          
 
           <div class="pickup-batch-content-body">
             <div class="pickup-batch-toolbar">
@@ -239,6 +246,11 @@
               </div>
             </div>
           </template>
+          <template #icon="{ isActive }">
+    <span class="click-trigger-text">
+      {{ isActive ? '收起' : '展开' }}
+    </span>
+  </template>
 
           <div class="pickup-batch-content-body">
             <div class="pickup-batch-toolbar">
@@ -247,7 +259,7 @@
                   最近操作：{{ formatSyncedAt(batch.lastSyncedAt) }}
                 </span>
               </div>
-
+              
               <div class="pickup-actions">
                 <el-button
                   size="small"
@@ -1330,5 +1342,21 @@ const handleUploadError = (error: Error) => {
   }
 }
 
+.click-trigger-text {
+  font-size: 13px;
+  font-weight: bold;
+  color: #409eff;       /* 暗示可以点击 */
+  white-space: nowrap;  /* 强制文字不换行 */
+  
+  /* 核心修改：上下 padding 缩减到 4px（解决撑开间距），左右保持 12px 方便手机点击 */
+  padding: 4px 12px !important;
+  
+  /* 强行让它在 Flex 轴线上完美居中，不破坏整体的排版平衡 */
+  display: inline-flex;
+  align-items: center;
+  /* 提高层级，强制拦截触控 */
+  position: relative;
+  z-index: 100 !important; 
+}
 
 </style>

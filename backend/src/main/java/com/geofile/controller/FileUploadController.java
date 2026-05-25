@@ -268,12 +268,27 @@ public class FileUploadController {
                     .replaceAll("\\+", "%20");
 
             HttpHeaders headers = new HttpHeaders();
-            // 根据文件后缀动态探测 Content-Type
-            String contentType = java.nio.file.Files.probeContentType(fullPath);
-            headers.setContentType(contentType != null ? MediaType.parseMediaType(contentType) : MediaType.APPLICATION_OCTET_STREAM);
-            //headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+//            // 根据文件后缀动态探测 Content-Type
+//            String contentType = java.nio.file.Files.probeContentType(fullPath);
+//            headers.setContentType(contentType != null ? MediaType.parseMediaType(contentType) : MediaType.APPLICATION_OCTET_STREAM);
+//            //headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+//            headers.setContentLength(file.getFileSize());
+//            headers.setContentDispositionFormData("attachment", encodedFileName);
+
+            // ====================  核心修改：多端兼容强制下载流 ====================
+            // 彻底废弃 probeContentType。只要调用下载接口，无论什么文件格式，一律强行返回二进制流！
+            // 这将直接切断 Safari、夸克等浏览器试图在网页内预览、渲染图片的念头，逼迫其直接拉起系统下载管理器
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.setContentLength(file.getFileSize());
-            headers.setContentDispositionFormData("attachment", encodedFileName);
+
+            // 采用最严苛的标准 Header 组装，双引号锁死文件名，兼容国内各路魔改套壳浏览器
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encodedFileName + "\"");
+
+            // 严防死守：增加禁用浏览器缓存和代理中间件缓存的响应头，防止夸克等浏览器在后台偷偷进行二次预加载请求
+            headers.add(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate");
+            headers.add(HttpHeaders.PRAGMA, "no-cache");
+            headers.add(HttpHeaders.EXPIRES, "0");
+            // =========================================================================
 
             // 增加 SHA-256 响应头，方便前端校验文件完整性
             if (file.getFileHash() != null) {
@@ -400,7 +415,7 @@ public class FileUploadController {
         try {
             // 对中文消息进行编码，防止 URL 乱码
             String encodedMsg = URLEncoder.encode(message, StandardCharsets.UTF_8);
-            String targetUrl = "http://localhost:9000/error?msg=" + encodedMsg;
+            String targetUrl = "/error?msg=" + encodedMsg;
 
             log.info("重定向至错误页: {}", targetUrl);
 
