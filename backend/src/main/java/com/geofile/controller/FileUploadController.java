@@ -282,8 +282,9 @@ public class FileUploadController {
             headers.setContentLength(file.getFileSize());
 
             // 采用最严苛的标准 Header 组装，双引号锁死文件名，兼容国内各路魔改套壳浏览器
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encodedFileName + "\"");
+            //headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encodedFileName + "\"");
 
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encodedFileName + "\"; filename*=utf-8''" + encodedFileName);
             // 严防死守：增加禁用浏览器缓存和代理中间件缓存的响应头，防止夸克等浏览器在后台偷偷进行二次预加载请求
             headers.add(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate");
             headers.add(HttpHeaders.PRAGMA, "no-cache");

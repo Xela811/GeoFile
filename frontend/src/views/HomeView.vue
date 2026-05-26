@@ -1314,89 +1314,13 @@ const downloadFile = async () => {
 
     // ==================== ️ 核心修改：多端兼容 ====================
     
-    // 1. 精准识别恶劣的移动端环境
+    // 微信生态提示
     const ua = navigator.userAgent.toLowerCase()
-    //  国际主流标准派
-const isChrome = ua.includes('chrome') && !ua.includes('chromium') && !ua.includes('edge') && !ua.includes('edg')
-const isFirefox = ua.includes('firefox')
-const isEdge = ua.includes('edge') || ua.includes('edg')
-const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
-
-//  国内主流第三方独立浏览器（包含你之前提到的）
-const isQuark = ua.includes('quark')        // 夸克
-const isVia = ua.includes('via')            // Via
-const isUC = ua.includes('ucbrowser')       // UC
-const isQQ = ua.includes('mqqbrowser')      // QQ浏览器 (注意：MQQBrowser是QQ浏览器，MicroMessenger是微信)
-const isBaidu = ua.includes('baiduboxapp') || ua.includes('baidubrowser') // 百度
-
-//  新增：国内手机厂商自带原生浏览器派
-const isXiaomi = ua.includes('miuibrowser') // 小米/红米自带
-const isHuawei = ua.includes('huaweibrowser') || ua.includes('honorbrowser') // 华为/荣耀自带
-const isOppo = ua.includes('heytapbrowser') // OPPO自带
-const isVivo = ua.includes('vivobrowser')   // Vivo自带
-
-//  新增：超级 App 内嵌生态派（地狱级拦截重灾区）
-const isWeChat = ua.includes('micromessenger') // 微信内置浏览器
-const isWeibo = ua.includes('weibo')           // 微博内置浏览器
-
-//  综合环境大归类（用于一刀切逻辑）
-const isIOS = /ipad|iphone|ipod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-
-const isChallengingMobileEnv = 
-  isIOS || 
-  isSafari || 
-  isQuark || 
-  isVia || 
-  isUC || 
-  isQQ || 
-  isBaidu || 
-  isXiaomi || 
-  isHuawei || 
-  isOppo || 
-  isVivo || 
-  isWeChat || 
-  isWeibo
-    // 2. 如果是 Via / Safari / 夸克 / iOS 环境，果断放弃 fetch Blob
-    if (isChallengingMobileEnv) {
-      ElMessage.success('已成功拉起系统下载管理器')
-
-      if (isWeChat) {
-    ElMessage.warning('如果下载未触发，请点击右上角选择“在浏览器中打开”')
-  }
-
-      //  核心大招：利用当前窗口就地重定向！
-      // 只要后端 Response Header 配置了 Content-Disposition: attachment
-      // 夸克绝对不会弹窗拦截“允许新链接打开”！Safari 也绝对不会触发 load failed！
-      // 它们会在当前页感知到文件流，直接唤起浏览器底层的原生下载器！
-      //window.location.href = `/api/file/download/${fileId}?${params.toString()}`
-
-      setTimeout(() => {
-        window.location.href = `/api/file/download/${fileId}?${params.toString()}`
-      }, 50)
-      // 修正 ：闭包锁死当前文件 ID，防止用户切页面导致 selectedFile 变成 null 报错
-      const savedFileId = fileId
-
-      // 3秒后偷偷拉取一次最新计数，更新前端界面
-      setTimeout(async () => {
-       try {
-        const finalRes = await fetch(`/api/file/detail/${savedFileId}`)
-        const finalData = await finalRes.json()
-        if (finalData.code === 200 && selectedFile.value && selectedFile.value.id === savedFileId) {
-          selectedFile.value = finalData.data
-        }
-      }catch (err) {
-          console.error('移动端异步同步计数失败:', err)
-      }
-        }, 6000)
-      
-        setTimeout(() => {
-      isDetailDownloading.value = false
-    }, 5000)
-
-      return // 移动端逻辑到此完美闭环，提前退出
+    if (ua.includes('micromessenger')) {
+      ElMessage.warning('如果下载未触发，请点击右上角选择“在浏览器中打开”')
     }
 
-    // 3. 使用 fetch 获取文件，这样可以捕获错误
+    /*// 3. 使用 fetch 获取文件，这样可以捕获错误
     const response = await fetch(`/api/file/download/${fileId}?${params.toString()}`)
 
     if (!response.ok) {
@@ -1437,7 +1361,36 @@ const isChallengingMobileEnv =
     const finalData = await finalRes.json()
     if (finalData.code === 200) {
       selectedFile.value = finalData.data
-    }
+    }*/
+
+    const downloadUrl = `/api/file/download/${fileId}?${params.toString()}`
+    
+    // 4. 创建隐藏的原生 HTML5 锚点指向后端真实 URL
+    const a = document.createElement('a')
+    a.href = downloadUrl
+    a.setAttribute('download', '')
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    
+    a.click()
+    
+    document.body.removeChild(a)
+    ElMessage.success('已成功唤起系统下载')
+    // =========================================================
+
+    // 不要手动 += 1，而是锁死当前文件 ID，延迟 3 秒后请求后端拿最权威的数据刷新界面
+    const savedFileId = fileId
+    setTimeout(async () => {
+      try {
+        const finalRes = await fetch(`/api/file/detail/${savedFileId}${getPosParams()}`)
+        const finalData = await finalRes.json()
+        if (finalData.code === 200 && selectedFile.value && selectedFile.value.id === savedFileId) {
+          selectedFile.value = finalData.data
+        }
+      } catch (err) {
+        console.error('异步同步计数失败:', err)
+      }
+    }, 3000)
 
     setTimeout(() => {
       isDetailDownloading.value = false

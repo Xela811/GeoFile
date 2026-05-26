@@ -95,7 +95,7 @@ onMounted(() => {
 const triggerBackendDownload = async (lat: number, lng: number) => {
   try {
     const downloadUrl = `/api/file/download/${fileId}?token=${token}&lat=${lat}&lng=${lng}`
-    const response = await fetch(downloadUrl, {
+    /*const response = await fetch(downloadUrl, {
       headers: {
         // 显式告诉后端：我是异步请求，我只要数据或文件流，不要给我返回 HTML 网页！
         'X-Requested-With': 'XMLHttpRequest',
@@ -135,9 +135,20 @@ const triggerBackendDownload = async (lat: number, lng: number) => {
     a.click()
 
     window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)*/
+
+    // 废弃掉在内存里拉取完整 blob 的沉重逻辑，直接利用隐藏的 a 标签指向后端的真实下载 URL
+    const a = document.createElement('a')
+    a.href = downloadUrl
+    a.setAttribute('download', '') // 强行声明下载属性
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    
+    a.click() // 夸克会识别为用户纯粹的下载意愿，直接拉起原生下载器
+    
     document.body.removeChild(a)
 
-    // 顺滑下载完毕，功成身退，引导回首页
+    // 下载完毕，引导回首页
     downloadSuccess.value = true // 先确立成功标志
     loading.value = false
     ElMessage.success('位置校验通过，文件已开始下载！')

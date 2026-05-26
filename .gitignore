@@ -44,5 +44,4 @@ yarn-debug.log*
 yarn-error.log*
 
 # 数据库相关（如果你本地有临时导出的 SQL 备份）
-*.sql
 !/doc/*.sql  # 但不要忽略 doc 目录下的初始化脚本
