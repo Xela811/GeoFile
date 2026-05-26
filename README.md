@@ -13,7 +13,7 @@
 
 **基于地理位置的免登录全栈文件边缘分享利器**
 
-[在线文档](https://your-domain.com) · [功能演示](https://your-domain.com) · [Issue 反馈](https://github.com/your-repo/issues)
+ [功能演示](https://geofile.top) · [Issue 反馈](https://github.com/Xela811/GeoFile/issues)
 
 </div>
 
@@ -589,7 +589,7 @@ public void physicalFileCleanup() {
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-repo/GeoFile.git
+git clone https://github.com/Xela811/GeoFile.git
 cd GeoFile
 
 # 2. 后端启动 (Spring Boot 3)
@@ -861,7 +861,7 @@ A:
 
 <div align="center">
 
-**如有问题或建议，欢迎提交 [Issue](https://github.com/your-repo/issues)**
+**如有问题或建议，欢迎提交 [Issue](https://github.com/Xela811/GeoFile/issues)**
 
 ⭐ 如果这个项目对你有帮助，请给个 Star！
 
