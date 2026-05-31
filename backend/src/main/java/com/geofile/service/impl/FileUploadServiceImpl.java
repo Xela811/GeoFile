@@ -498,7 +498,7 @@ public class FileUploadServiceImpl implements FileUploadService {
                 if (file.getStatus() == 3) throw new DownloadException("文件下载次数已达上限");
             }
 
-            // 4. 获取下载限制配置
+            /*// 4. 获取下载限制配置
             DownloadLimit downloadLimit = downloadLimitService.getOne(
                     new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
             );
@@ -536,7 +536,9 @@ public class FileUploadServiceImpl implements FileUploadService {
                 log.info("文件下载成功: fileId={}, fileName={}, 下载次数={}", fileId, file.getFileName(), file.getDownloadCount());
 
 
-            return file;
+            return file;*/
+            fileService.incrementDownloadCountWithRetry(fileId);
+            return fileService.getById(fileId);
 
         } catch (DownloadException e) {
             throw e;

@@ -11,6 +11,7 @@ import com.geofile.service.FileBatchService;
 import com.geofile.service.FileHashService;
 import com.geofile.service.FileService;
 import com.geofile.util.RedisUtil;
+import com.geofile.exception.DownloadException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,8 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.domain.geo.Metrics;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.text.SimpleDateFormat;
@@ -389,7 +392,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
             if (file.getStatus() == 3) throw new IllegalArgumentException("文件下载次数已达上限");
         }
 
-        // 4. 执行计数逻辑
+        /*// 4. 执行计数逻辑
         DownloadLimit downloadLimit = downloadLimitService.getOne(
                 new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
         );
@@ -405,7 +408,68 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
 
         // 5. 保存并返回
         this.updateById(file);
-        return file;
+        return file;*/
+        this.incrementDownloadCountWithRetry(fileId);
+        return this.getById(fileId);
+    }
+
+    @Override
+    public void incrementDownloadCountWithRetry(Long fileId) {
+        int retryCount = 0;
+        int maxRetries = 30; // 咖啡厅并发高时，5次重试更加稳妥
+
+        while (retryCount < maxRetries) {
+            // 1. 必须重新从数据库捞取最新快照（保证拿到最新的 version 和最新的 count）
+            File file = this.getById(fileId);
+            if (file == null) {
+                throw new DownloadException("文件不存在或已被物理删除");
+            }
+
+            // 2. 检查次数限制配置
+            DownloadLimit downloadLimit = downloadLimitService.getOne(
+                    new LambdaQueryWrapper<DownloadLimit>().eq(DownloadLimit::getFileId, fileId)
+            );
+            int currentCount = (file.getDownloadCount() == null) ? 0 : file.getDownloadCount();
+            int maxDownloads = (downloadLimit != null) ? downloadLimit.getMaxDownloads() : 0;
+
+            // 3. 并发状态下的状态截断
+            if (file.getStatus() != null && file.getStatus() == 3) {
+                throw new DownloadException("该文件下载次数已达上限");
+            }
+            if (maxDownloads > 0 && currentCount >= maxDownloads) {
+                throw new DownloadException("该文件的下载次数已达上限");
+            }
+
+            // 4. 计数演进
+            int nextCount = currentCount + 1;
+            file.setDownloadCount(nextCount);
+
+            // 如果刚好下满，打上残影状态 3
+            if (maxDownloads > 0 && nextCount >= maxDownloads) {
+                file.setStatus(3);
+                log.info("文件 [ID:{}] 已达到最大下载次数，状态转为满额状态(3)", fileId);
+            }
+
+            // 5. 扣动扳机：利用 MyBatis-Plus 乐观锁更新
+            int rows = this.baseMapper.updateById(file);
+            if (rows > 0) {
+                // 🌟 命中线程 A 场景：更新成功，安全退出！
+                return;
+            }
+
+            // 🚨 命中线程 B 场景：由于并发，version 变了。让出微小时间片，准备自旋重试
+            retryCount++;
+            log.warn("文件 [ID:{}] 因并发导致乐观锁更新失败，正在进行第 {} 次自旋重试...", fileId, retryCount);
+            try {
+                Thread.sleep(10 + (int)(Math.random() * 20)); // 随机盐值抖动，错开并发洪峰
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        // 6. 极端高并发兜底
+        log.error("文件 [ID:{}] 在连续 {} 次重试后乐观锁依然冲突，触发高并发拒绝服务", fileId, maxRetries);
+        throw new DownloadException("服务器繁忙，请稍后重试");
     }
 }
 

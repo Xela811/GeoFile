@@ -24,7 +24,8 @@ create table t_file
     deleted         tinyint     default 0                 null comment '逻辑删除',
     upload_token    varchar(100)                          null comment '上传令牌（用于免登录身份验证）',
     download_token  varchar(100)                          null comment '下载令牌（用于下载验证）',
-    is_private      tinyint(1)  default 1                 null comment '是否为私有文件：1-私有(需取件码)，0-公开(直接下载)'
+    is_private      tinyint(1)  default 1                 null comment '是否为私有文件：1-私有(需取件码)，0-公开(直接下载)',
+    version         int         default 0                 null comment '乐观锁版本号'
 )
     comment '文件信息表' collate = utf8mb4_0900_ai_ci;
 
@@ -137,5 +138,6 @@ create index idx_create_time
 
 create index idx_file_id
     on t_file_log (file_id);
+
 
 

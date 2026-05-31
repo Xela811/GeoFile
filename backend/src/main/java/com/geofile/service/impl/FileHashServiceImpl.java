@@ -42,7 +42,7 @@ public class FileHashServiceImpl extends ServiceImpl<FileHashMapper, FileHash> i
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean decrementReference(String fileHash) {
-        boolean updated = this.update(new LambdaUpdateWrapper<FileHash>()
+        /*boolean updated = this.update(new LambdaUpdateWrapper<FileHash>()
                 .eq(FileHash::getFileHash, fileHash)
                 .gt(FileHash::getReferenceCount, 0)
                 .setSql("reference_count = reference_count - 1"));
@@ -53,6 +53,15 @@ public class FileHashServiceImpl extends ServiceImpl<FileHashMapper, FileHash> i
                     .eq(FileHash::getReferenceCount, 0)
                     .set(FileHash::getStatus, 0));
         }
-        return updated;
+        return updated;*/
+        return this.update(new LambdaUpdateWrapper<FileHash>()
+                .eq(FileHash::getFileHash, fileHash)
+                .gt(FileHash::getReferenceCount, 0)
+                // 🌟 终极心法：在 IF 里面直接写死减法表达式 reference_count - 1
+                // 这样无论 MySQL 内部是先算前面还是先算后面，reference_count - 1 = 0
+                // 表达的永远是 “只要减完的结果是 0，status 就变 0” 这一纯粹的物理数学逻辑！
+                .setSql("status = IF(reference_count - 1 = 0, 0, status), " +
+                        "reference_count = reference_count - 1, " +
+                        "updated_time = NOW()"));
     }
 }

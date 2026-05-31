@@ -51,6 +51,7 @@ public interface FileService extends IService<File> {
      */
     void updateFileLocation(Long fileId, Double lat, Double lng, Integer radius);
 
+    void incrementDownloadCountWithRetry(Long fileId);
 
     File processAccess(Long fileId, String token);
 }
