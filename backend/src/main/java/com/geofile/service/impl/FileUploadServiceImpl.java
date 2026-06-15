@@ -441,7 +441,7 @@ public class FileUploadServiceImpl implements FileUploadService {
     }
 
     @Override
-    public File downloadFile(Long fileId, String downloadToken, Double lat, Double lng) {
+    public File downloadFile(Long fileId, String downloadToken, Double lat, Double lng, boolean shouldCount) {
         try {
             // 1. 查询文件
             File file = fileService.getById(fileId);
@@ -537,7 +537,10 @@ public class FileUploadServiceImpl implements FileUploadService {
 
 
             return file;*/
-            fileService.incrementDownloadCountWithRetry(fileId);
+            //fileService.incrementDownloadCountWithRetry(fileId);
+            if (shouldCount) {
+                fileService.incrementDownloadCountWithRetry(fileId);
+            }
             return fileService.getById(fileId);
 
         } catch (DownloadException e) {

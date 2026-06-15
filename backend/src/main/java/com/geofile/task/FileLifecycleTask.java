@@ -222,7 +222,7 @@ public class FileLifecycleTask {
     /**
      * 物理清理任务：每天凌晨 3 点执行
      */
-    @Scheduled(cron = "0 0 3 * * ?")
+    @Scheduled(cron = "0 0 3 * * ?", zone = "Asia/Shanghai")
     public void physicalFileCleanup() {
 
         // 计算 T+1 的时间阈值：当前时间减去 24 小时

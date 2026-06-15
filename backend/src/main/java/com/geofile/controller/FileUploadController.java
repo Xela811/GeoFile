@@ -23,6 +23,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
+import org.springframework.core.io.support.ResourceRegion;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -32,9 +33,15 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.BufferedOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -66,6 +73,160 @@ public class FileUploadController {
 
     @Value("${file.upload.path}")
     private String uploadPath;
+
+    // 用于存放临时分片的临时根目录
+    @Value("${file.upload.path}/tmp/geofile")
+    private String uploadMergePath;
+
+    @PostMapping("/upload/chunk")
+    @Operation(summary = "接收分片")
+    public Result<String> uploadChunk(
+            @RequestParam("chunk") MultipartFile chunk,
+            @RequestParam("identifier") String identifier, // 文件的 SHA-256 作为唯一标识
+            @RequestParam("chunkNumber") Integer chunkNumber) {
+        try {
+            // 创建临时文件夹存放该文件的分片：/tmp/geofile/chunks/fileSha256/
+            java.io.File chunkDir = new java.io.File(uploadMergePath + "/chunks/" + identifier);
+            if (!chunkDir.exists()) chunkDir.mkdirs();
+
+            // 将分片保存为独立文件：如 0, 1, 2...
+            java.io.File chunkFile = new java.io.File(chunkDir, String.valueOf(chunkNumber));
+            //chunk.transferTo(chunkFile);
+            try (InputStream is = chunk.getInputStream();
+                 BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(chunkFile))) {
+                byte[] buffer = new byte[64 * 1024]; // 64KB 高速读写缓冲区
+                int bytesRead;
+                while ((bytesRead = is.read(buffer)) != -1) {
+                    bos.write(buffer, 0, bytesRead);
+                }
+                bos.flush();
+            }
+            return Result.success("分片 " + chunkNumber + " 上传成功");
+        } catch (Exception e) {
+            return Result.error("分片上传失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/upload/merge")
+    @Operation(summary = "合并分片并触发原有业务落库")
+    public Result<List<FileVO>> mergeChunks(
+            @RequestBody Map<String, Object> params,
+            HttpServletRequest request) {
+        String identifier = (String) params.get("identifier");
+        String sampleHash = (String) params.get("sampleHash");
+        String fileName = (String) params.get("fileName");
+        Double lat = params.get("lat") != null ? Double.valueOf(params.get("lat").toString()) : null;
+        Double lng = params.get("lng") != null ? Double.valueOf(params.get("lng").toString()) : null;
+        Integer maxDownloads = (Integer) params.get("maxDownloads");
+        Integer validMinutes = (Integer) params.get("validMinutes");
+        Boolean needCode = (Boolean) params.get("needCode");
+        String providedToken = (String) params.get("providedToken");
+
+        try {
+            java.io.File chunkDir = new java.io.File(uploadMergePath + "/chunks/" + identifier);
+            java.io.File[] chunks = chunkDir.listFiles();
+            if (chunks == null || chunks.length == 0) return Result.error("找不到分片资源");
+
+            // 严格按照分片顺序（0, 1, 2...）排序
+            Arrays.sort(chunks, Comparator.comparingInt(f -> Integer.parseInt(f.getName())));
+
+            // 创建最终合体文件
+            //java.io.File mergedFile = new java.io.File(uploadMergePath + "/chunks/" + fileName);
+
+            String extension = getFileExtension(fileName);
+            // 调用你 uploadFile 里面的真实路径生成算法（生成分级混淆目录，如 /202603/xx/sha256.mp4）
+            String finalRelativePath = generateComplexPath(identifier, extension);
+            java.nio.file.Path finalAbsolutePath = java.nio.file.Paths.get(uploadPath, finalRelativePath);
+
+            // 确保最终业务目录存在
+            java.nio.file.Files.createDirectories(finalAbsolutePath.getParent());
+            java.io.File mergedFile = finalAbsolutePath.toFile();
+
+            try (FileOutputStream fos = new FileOutputStream(mergedFile);
+                 FileChannel destChannel = fos.getChannel()) {
+                for (java.io.File chunk : chunks) {
+                    try (FileInputStream fis = new FileInputStream(chunk);
+                         FileChannel srcChannel = fis.getChannel()) {
+                        srcChannel.transferTo(0, srcChannel.size(), destChannel);
+                    }
+                    chunk.delete(); // 合并完随手物理删除分片，省空间
+                }
+            }
+            chunkDir.delete(); // 删掉临时文件夹
+
+            /*// 把合并出来的标准 File 转成 Spring 的 MultipartFile
+            FileInputStream fileInputStream = new FileInputStream(mergedFile);
+            MultipartFile mockMultipartFile = new org.springframework.mock.web.MockMultipartFile(
+                    "files", fileName, java.nio.file.Files.probeContentType(mergedFile.toPath()), fileInputStream
+            );
+
+            // 注入 Service 原方法！
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(
+                    List.of(mockMultipartFile), lat, lng, 1000, maxDownloads, validMinutes, needCode,
+                    providedToken, List.of(sampleHash != null ? sampleHash : ""), List.of(identifier), request
+            );
+
+            mergedFile.delete(); // 业务落库后，删除这个合并的临时文件（因为Service内部已经复制进分级目录了）
+            return Result.success(results);*/
+            long realFileSize = mergedFile.length();
+            log.info("分片磁盘合并成功，文件真实大小: {} 字节", realFileSize);
+            // 因为物理文件已经在最终路径躺好了
+            // 伪造一个大小为 0 的 Mock 只是为了迎合原 Service 的参数要求，欺骗它走完落库校验即可
+            MultipartFile mockMultipartFile = new org.springframework.mock.web.MockMultipartFile(
+                    "files", fileName, java.nio.file.Files.probeContentType(finalAbsolutePath), new byte[]{0}
+            ){
+                @Override
+                public long getSize() {
+                    return realFileSize; // 当底层 fileValidator.validate 过来查岗时，交出真实大小
+                }
+            };
+
+            // 注入 Service 之前，因为文件已经落盘成功，要防止底层 uploadFile 重复写盘
+            //  uploadFile 内部执行了 fileStorageService.saveFileCustomPath(saveStream, fullPath);
+            // 如果传一个 byte[0] 的流进去，它会写一个空文件覆盖我们刚合并好的大文件
+            // boolean isExisting = fileHashService.incrementReference(sha256);
+            // 我们可以直接在调用 Service 之前，抢先把数据库记录生成出来（status=1, count=1），这样进入 service 就会直接命中“秒传分支”，绝不会执行写盘覆盖，并且完美执行全部业务落库！
+
+            boolean isAlreadyInDb = fileHashService.incrementReference(identifier);
+            if (!isAlreadyInDb) {
+                FileHash newHash = new FileHash();
+                newHash.setFileHash(identifier);
+                newHash.setSampleHash(sampleHash);
+                newHash.setFileSize(realFileSize); // 必须记录真实大小
+                newHash.setStoragePath(finalRelativePath);
+                newHash.setStorageType("LOCAL");
+                newHash.setReferenceCount(1);
+                newHash.setStatus(1);
+                newHash.setMimeType(java.nio.file.Files.probeContentType(finalAbsolutePath));
+                newHash.setExtension(extension);
+                newHash.setCreatedTime(LocalDateTime.now());
+                fileHashService.save(newHash);
+            }
+
+            // 完美调用原 Service，无感闭环所有 RedisGEO 写入、提取码生成和持久化逻辑
+            List<FileVO> results = fileUploadService.uploadFilesWithLocation(
+                    List.of(mockMultipartFile), lat, lng, 1000, maxDownloads, validMinutes, needCode,
+                    providedToken, List.of(sampleHash != null ? sampleHash : ""), List.of(identifier), request
+            );
+
+            return Result.success(results);
+        } catch (Exception e) {
+            log.error("分片合并并调用业务落库失败", e);
+            return Result.error("合并失败: " + e.getMessage());
+        }
+    }
+    private String getFileExtension(String filename) {
+        if (filename == null || !filename.contains(".")) {
+            return "";
+        }
+        return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+    }
+    private String generateComplexPath(String sha256, String extension) {
+        String dir1 = sha256.substring(0, 2);
+        String dir2 = sha256.substring(2, 4);
+        String fileName = sha256 + (extension != null && !extension.isEmpty() ? "." + extension : "");
+        return String.join("/", dir1, dir2, fileName);
+    }
     /**
      * 上传单个文件
      */
@@ -236,6 +397,7 @@ public class FileUploadController {
             @RequestParam String token,
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
+            @RequestHeader(value = "Range", required = false) String rangeHeader,
             HttpServletRequest request,
             HttpServletResponse response) {
         String clientIp = IpUtils.getClientIp(request);
@@ -246,8 +408,10 @@ public class FileUploadController {
             // 允许前端跨域提取 Content-Disposition 响应头获取真实文件名
             response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
 
+            boolean shouldCount = (rangeHeader == null || rangeHeader.startsWith("bytes=0-"));
+
             // 1. 验证并获取文件
-            com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token, lat, lng);
+            com.geofile.entity.File file = fileUploadService.downloadFile(fileId, token, lat, lng, shouldCount);
 
             // 2. 构建文件路径
             java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath)
@@ -518,11 +682,14 @@ public class FileUploadController {
     ).collect(Collectors.toSet());
 
     @GetMapping("/preview/{fileId}")
-    public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token,HttpServletRequest request) {
+    public ResponseEntity<Resource> previewFile(@PathVariable Long fileId, @RequestParam String token, @RequestHeader(value = "Range", required = false) String rangeHeader,HttpServletRequest request) {
         String clientIp = IpUtils.getClientIp(request);
         try {
+            // 只有首次完整请求才计数，Range续传请求跳过计数
+            boolean shouldCount = (rangeHeader == null || rangeHeader.startsWith("bytes=0-"));
+
             // 1. 业务逻辑校验（包含计数+1）
-            com.geofile.entity.File fileEntity = fileService.processAccess(fileId, token);
+            com.geofile.entity.File fileEntity = fileService.processAccess(fileId, token, shouldCount);
 
             java.nio.file.Path fullPath = java.nio.file.Paths.get(uploadPath, fileEntity.getFilePath()).normalize();
             java.io.File diskFile = fullPath.toFile();
@@ -569,6 +736,39 @@ public class FileUploadController {
                     .header("X-Frame-Options", "ALLOWALL")
                     .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                     .body(resource);
+            // 原来直接 return ResponseEntity.ok()... 改为用 ResourceRegion 支持Range
+            /*HttpHeaders responseHeaders = new HttpHeaders();
+            responseHeaders.setContentType(MediaType.parseMediaType(contentType));
+            responseHeaders.add(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" +
+                    URLEncoder.encode(originalFileName, "UTF-8") + "\"");
+            responseHeaders.add("X-Frame-Options", "ALLOWALL");
+            responseHeaders.add(HttpHeaders.ACCEPT_RANGES, "bytes");
+
+// 处理Range请求
+            if (rangeHeader != null) {
+                long fileLength = diskFile.length();
+                // 解析Range头 bytes=start-end
+                String rangeValue = rangeHeader.substring(6); // 去掉"bytes="
+                String[] parts = rangeValue.split("-");
+                long start = Long.parseLong(parts[0]);
+                long end = parts.length > 1 && !parts[1].isEmpty()
+                        ? Long.parseLong(parts[1])
+                        : fileLength - 1;
+
+                long contentLength = end - start + 1;
+                responseHeaders.add(HttpHeaders.CONTENT_RANGE,
+                        "bytes " + start + "-" + end + "/" + fileLength);
+                responseHeaders.setContentLength(contentLength);
+
+                ResourceRegion region = new ResourceRegion(resource, start, contentLength);
+                return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+                        .headers(responseHeaders)
+                        .body(region); // 注意类型，需要单独处理
+            }
+
+            return ResponseEntity.ok()
+                    .headers(responseHeaders)
+                    .body(resource);*/
 
         } catch (IllegalArgumentException e) {
             fileLogService.recordLog(fileId, "PREVIEW", 0, "鉴权拒绝: " + e.getMessage(), null, null, clientIp);

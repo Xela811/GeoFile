@@ -3,8 +3,12 @@ package com.geofile.config;
 import com.geofile.interceptor.FileUploadInterceptor;
 import com.geofile.interceptor.VerificationCodeInterceptor;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.ResourceRegionHttpMessageConverter;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import java.util.List;
 
 /**
  * Web配置类

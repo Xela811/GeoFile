@@ -363,7 +363,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
 
     // 在 FileServiceImpl 中抽取出的公共逻辑
     @Override
-    public File processAccess(Long fileId, String downloadToken) {
+    public File processAccess(Long fileId, String downloadToken, boolean shouldCount) {
         // 1. 查询并校验 (直接复用你提供的逻辑)
         File file = this.getById(fileId);
         if (file == null) throw new IllegalArgumentException("文件不存在");
@@ -409,14 +409,17 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, File>
         // 5. 保存并返回
         this.updateById(file);
         return file;*/
-        this.incrementDownloadCountWithRetry(fileId);
+        //this.incrementDownloadCountWithRetry(fileId);
+        if (shouldCount) {
+            this.incrementDownloadCountWithRetry(fileId);
+        }
         return this.getById(fileId);
     }
 
     @Override
     public void incrementDownloadCountWithRetry(Long fileId) {
         int retryCount = 0;
-        int maxRetries = 30; // 咖啡厅并发高时，5次重试更加稳妥
+        int maxRetries = 30;
 
         while (retryCount < maxRetries) {
             // 1. 必须重新从数据库捞取最新快照（保证拿到最新的 version 和最新的 count）

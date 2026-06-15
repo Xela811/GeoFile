@@ -1,7 +1,8 @@
 spring:
   data:
     redis:
-      host: localhost
+      host: ${SPRING_REDIS_HOST:localhost}
+      password: ${SPRING_REDIS_PASSWORD:}
       port: 6379
       database: 0
       timeout: 5000ms
@@ -13,7 +14,7 @@ spring:
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/geofile?characterEncoding=utf-8&allowPublicKeyRetrieval=true&useSSL=false
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/geofile?characterEncoding=utf-8&allowPublicKeyRetrieval=true&useSSL=false}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
   servlet:
@@ -56,4 +57,4 @@ amap:
 # 文件上传配置
 file:
   upload:
-    path: ${user.home}/Projects/GeoFile/uploads
+    path: /app/uploads

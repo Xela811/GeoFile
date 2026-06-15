@@ -353,7 +353,7 @@ const calculateSampleHash = async (file: File): Promise<string> => {
   return sha256(arrayBuffer)
 }
 
-const startUpload = async () => {
+/*const startUpload = async () => {
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择要上传的文件')
     return
@@ -533,6 +533,317 @@ const startUpload = async () => {
       if (f.status === 'uploading') f.status = 'fail'
     })
     ElMessage.error(e.message || '上传过程中发生错误')
+    emit('error', e)
+  } finally {
+    isUploading.value = false
+    emit('update:loading', false)
+  }
+}*/
+const startUpload = async () => {
+  if (fileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的文件')
+    return
+  }
+
+  // 检查配置限制逻辑 (保持原样)
+  if (props.maxDownloads === 0 || props.validMinutes === 0) {
+    emit('require-limit-config')
+    return
+  }
+
+  isUploading.value = true
+  emit('update:loading', true)
+  let sharedUploadToken = ''
+
+  try {
+    // 1. 获取位置信息
+    const savedLocationStr = localStorage.getItem('userLocation')
+    const locationData = JSON.parse(savedLocationStr || '{}')
+    const latVal = locationData.useFixedCoords ? FIXED_LAT : locationData.lat
+    const lngVal = locationData.useFixedCoords ? FIXED_LNG : locationData.lng
+
+    // 2. 准备普通批量上传的 FormData（用于装不需要分片的小文件）
+    const batchFormData = new FormData()
+    let hasSmallFilesToUpload = false 
+
+    // 定义触发分片上传的阈值：100MB（超过100M的文件走分片，小于走普通批量，可根据喜好调整）
+    const CHUNK_THRESHOLD = 100 * 1024 * 1024 
+    const CHUNK_SIZE = 20 * 1024 * 1024 // 每个切片大小定为 20MB
+
+    // 遍历文件列表进行“预检”与分流处理
+    for (const file of fileList.value) {
+      if (!file.raw) continue
+
+      file.status = 'uploading'
+
+      // --- 采样快检 ---
+      const currentSampleHash = await calculateSampleHash(file.raw as File)
+
+      const quickCheck = await axios.post('/api/file/quick-check', {
+        size: file.raw.size,
+        sampleHash: currentSampleHash,
+      })
+
+      // 计算全量 Hash (进度映射到 0% - 40%)
+      const fileHash = await calculateSha256(file.raw as File, (p) => {
+        file.percentage = Math.floor(p * 0.4)
+      })
+
+      let isSecSuccess = false
+
+      // 尝试秒传
+      if (quickCheck.data.data.canPotentiallySecUpload && fileHash) {
+        const checkRes = await axios.post('/api/file/sec-upload', {
+          hash: fileHash,
+          fileName: file.raw.name,
+          lat: latVal,
+          lng: lngVal,
+          maxDownloads: props.maxDownloads,
+          validMinutes: props.validMinutes,
+          needCode: props.needCode,
+          uploadToken: sharedUploadToken,
+        })
+
+        if (checkRes.data.code === 200 && checkRes.data.data) {
+          // 秒传成功分支
+          file.status = 'success'
+          file.percentage = 100
+          if (!sharedUploadToken) {
+            sharedUploadToken = checkRes.data.data.uploadToken
+          }
+          emit('upload-success', checkRes.data, fileList.value.length)
+          isSecSuccess = true
+        }
+      }
+
+      // --- 秒传失败，进入物理上传流程 ---
+      if (!isSecSuccess) {
+        const fileRaw = file.raw as File
+
+        if (fileRaw.size > CHUNK_THRESHOLD) {
+          console.log(`文件 [${fileRaw.name}] 启动分片【并发】上传模式...`)
+          const totalChunks = Math.ceil(fileRaw.size / CHUNK_SIZE)
+
+          // 🌟🌟🌟【并发核心修改点：构建分片任务队列】
+          const chunkTasks: number[] = []
+          for (let i = 0; i < totalChunks; i++) {
+            chunkTasks.push(i)
+          }
+
+          // 记录当前已成功完成的切片数，用来平滑进度条
+          let completedChunksCount = 0
+          // 设定同时上传的并发数（根据国内网络情况，3~4 个并发是最优解，不容易被 CF 或 Nginx 掐断）
+          const CONCURRENCY_LIMIT = 4 
+
+          // 异步执行器
+          const runUploadWorker = async () => {
+            while (chunkTasks.length > 0) {
+              const i = chunkTasks.shift() // 抢占式获取一个分片编号
+              if (i === undefined) break
+
+              const start = i * CHUNK_SIZE
+              const end = Math.min(fileRaw.size, start + CHUNK_SIZE)
+              const chunkBlob = fileRaw.slice(start, end)
+
+              const chunkFormData = new FormData()
+              chunkFormData.append('chunk', chunkBlob, fileRaw.name)
+              chunkFormData.append('identifier', fileHash)
+              chunkFormData.append('chunkNumber', i.toString())
+
+              //  多个分片同时在网络通道中
+              await axios.post('/api/file/upload/chunk', chunkFormData)
+
+              completedChunksCount++
+              // 平滑进度条：映射到 (40% - 90%)
+              const chunkProgress = completedChunksCount / totalChunks
+              file.percentage = 40 + Math.floor(chunkProgress * 50)
+            }
+          }
+
+          //  开启多通道跑批并发
+          const workers = []
+          for (let w = 0; w < Math.min(CONCURRENCY_LIMIT, totalChunks); w++) {
+            workers.push(runUploadWorker())
+          }
+          await Promise.all(workers) // 等待所有分片线程并发全部冲完
+
+          // 所有分片传输完毕，向后端发起【收网合并】指令
+          console.log(`文件 [${fileRaw.name}] 分片并发上传完毕，发起高效合并...`)
+          const mergeResponse = await axios.post('/api/file/upload/merge', {
+            identifier: fileHash,
+            sampleHash: currentSampleHash,
+            fileName: fileRaw.name,
+            lat: latVal,
+            lng: lngVal,
+            maxDownloads: props.maxDownloads,
+            validMinutes: props.validMinutes,
+            needCode: props.needCode,
+            providedToken: sharedUploadToken || null
+          })
+
+          const mergeResult = mergeResponse.data
+          if (mergeResult.code === 200) {
+            file.status = 'success'
+            file.percentage = 100
+            
+            if (!sharedUploadToken && mergeResult.data && mergeResult.data.length > 0) {
+              sharedUploadToken = mergeResult.data[0].uploadToken
+            }
+            emit('upload-success', mergeResult, fileList.value.length)
+          } else {
+            throw new Error(mergeResult.message || `文件 [${fileRaw.name}] 合并失败`)
+          }
+
+        } else {
+          batchFormData.append('files', fileRaw)
+          batchFormData.append('sampleHashes', currentSampleHash)
+          batchFormData.append('fullHashes', fileHash)
+          hasSmallFilesToUpload = true
+        }
+        /*if (fileRaw.size > CHUNK_THRESHOLD) {
+          // ========= 【核心新增】分支 B1: 大文件执行前端切片上传 =========
+          console.log(`文件 [${fileRaw.name}] 超过阈值，启动分片上传模式...`)
+          const totalChunks = Math.ceil(fileRaw.size / CHUNK_SIZE)
+
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE
+            const end = Math.min(fileRaw.size, start + CHUNK_SIZE)
+            const chunkBlob = fileRaw.slice(start, end)
+
+            const chunkFormData = new FormData()
+            // 必须与后端 @RequestParam 命名的参数完全对应
+            chunkFormData.append('chunk', chunkBlob, fileRaw.name)
+            chunkFormData.append('identifier', fileHash)
+            chunkFormData.append('chunkNumber', i.toString())
+
+            // 发送单片
+            await axios.post('/api/file/upload/chunk', chunkFormData)
+
+            // 平滑进度条：分片上传进度映射到总进度的 (40% - 90%)，预留10%给后端合并
+            const chunkProgress = (i + 1) / totalChunks
+            file.percentage = 40 + Math.floor(chunkProgress * 50)
+          }
+
+          // 所有分片传输完毕，向后端发起【收网合并】指令
+          console.log(`文件 [${fileRaw.name}] 分片传输完毕，发起合并请求...`)
+          const mergeResponse = await axios.post('/api/file/upload/merge', {
+            identifier: fileHash,
+            sampleHash: currentSampleHash,
+            fileName: fileRaw.name,
+            lat: latVal,
+            lng: lngVal,
+            maxDownloads: props.maxDownloads,
+            validMinutes: props.validMinutes,
+            needCode: props.needCode,
+            providedToken: sharedUploadToken || null // 沿用已生成的批量Token
+          })
+
+          const mergeResult = mergeResponse.data
+          if (mergeResult.code === 200) {
+            file.status = 'success'
+            file.percentage = 100
+            
+            // 提取批次 Token
+            if (!sharedUploadToken && mergeResult.data && mergeResult.data.length > 0) {
+              sharedUploadToken = mergeResult.data[0].uploadToken
+            }
+            emit('upload-success', mergeResult, fileList.value.length)
+          } else {
+            throw new Error(mergeResult.message || `文件 [${fileRaw.name}] 合并失败`)
+          }
+
+        } else {
+          // ========= 分支 B2: 小文件依旧塞进 batchFormData，走原有的批量接口 =========
+          batchFormData.append('files', fileRaw)
+          batchFormData.append('sampleHashes', currentSampleHash)
+          batchFormData.append('fullHashes', fileHash)
+          hasSmallFilesToUpload = true
+        }*/
+      }
+    }
+
+    // 3. 处理打包在 batchFormData 里的剩余小文件（如果有的话）
+    if (hasSmallFilesToUpload) {
+      if (sharedUploadToken) {
+        batchFormData.append('providedToken', sharedUploadToken)
+      }
+      batchFormData.append('lat', latVal.toString())
+      batchFormData.append('lng', lngVal.toString())
+      
+      if (props.maxDownloads !== undefined && props.maxDownloads > 0) {
+        batchFormData.append('maxDownloads', props.maxDownloads.toString())
+      }
+      if (props.validMinutes !== undefined && props.validMinutes > 0) {
+        batchFormData.append('validMinutes', props.validMinutes.toString())
+      }
+      if (props.needCode !== undefined) {
+        batchFormData.append('needCode', props.needCode.toString())
+      }
+
+      console.log('发起剩余小文件的批量传统上传...')
+      
+      const totalBatchSize = fileList.value
+        .filter(f => f.status === 'uploading' && (f.raw?.size || 0) <= CHUNK_THRESHOLD)
+        .reduce((sum, f) => sum + (f.size || 0), 0)
+
+      const response = await axios.post('/api/file/upload/batch-with-location', batchFormData, {
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total && totalBatchSize > 0) {
+            const totalLoaded = progressEvent.loaded
+            let accumulatedSize = 0
+
+            fileList.value.forEach((file) => {
+              // 过滤掉秒传和已经通过分片上传成功的文件
+              if (file.status === 'success' || (file.raw?.size || 0) > CHUNK_THRESHOLD) {
+                if (file.status === 'success') accumulatedSize += file.size || 0
+                return
+              }
+              const fileSize = file.size || 0
+              const startThreshold = accumulatedSize
+              const endThreshold = accumulatedSize + fileSize
+
+              if (totalLoaded >= endThreshold) {
+                file.percentage = 100
+              } else if (totalLoaded > startThreshold) {
+                const fileLoaded = totalLoaded - startThreshold
+                const uploadP = Math.round((fileLoaded / fileSize) * 100)
+                file.percentage = 40 + Math.floor(uploadP * 0.6)
+              } else {
+                file.percentage = 40
+              }
+              accumulatedSize += fileSize
+            })
+          }
+        },
+      })
+
+      const result = response.data
+      if (result.code === 200) {
+        fileList.value.forEach((f) => {
+          if (f.status === 'uploading') {
+            f.status = 'success'
+            f.percentage = 100
+          }
+        })
+        if (!sharedUploadToken) sharedUploadToken = response.data.data[0].uploadToken
+        if (result.data) emit('upload-success', result, fileList.value.length)
+        emit('success', fileList.value)
+      } else {
+        throw new Error(result.message || '传统批量上传部分失败')
+      }
+    }
+
+    // 如果运行到最后，列表里的所有文件都被妥善处理成功了
+    if (fileList.value.every(f => f.status === 'success')) {
+      emit('success', fileList.value)
+    }
+
+  } catch (e: any) {
+    console.error('分片或批量上传捕获异常:', e)
+    fileList.value.forEach((f) => {
+      if (f.status === 'uploading') f.status = 'fail'
+    })
+    ElMessage.error(e.message || '文件上传或合并过程中发生错误')
     emit('error', e)
   } finally {
     isUploading.value = false

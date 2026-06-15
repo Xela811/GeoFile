@@ -53,5 +53,5 @@ public interface FileService extends IService<File> {
 
     void incrementDownloadCountWithRetry(Long fileId);
 
-    File processAccess(Long fileId, String token);
+    File processAccess(Long fileId, String token, boolean shouldCount);
 }
