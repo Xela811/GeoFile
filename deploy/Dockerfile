@@ -6,7 +6,7 @@ RUN apk add --no-cache tzdata && \
 
 WORKDIR /app
 
-COPY target/*.jar app.jar
+COPY backend/target/*.jar app.jar
 
 EXPOSE 8080
 
