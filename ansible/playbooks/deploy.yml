@@ -1,0 +1,59 @@
+- name: Deploy GeoFile
+  hosts: all
+  become: true
+
+  vars:
+    deploy_dir: /opt/geofile-deploy
+
+  tasks:
+    - name: Create deploy directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ deploy_dir }}"
+        - "{{ deploy_dir }}/backend/logs"
+        - "{{ deploy_dir }}/mysql/data"
+        - "{{ deploy_dir }}/mysql/init"
+        - "{{ deploy_dir }}/redis/data"
+        - "{{ deploy_dir }}/uploads"
+        - "{{ deploy_dir }}/nginx/conf.d"
+        - "{{ deploy_dir }}/nginx/html"
+        - "{{ deploy_dir }}/nginx/ssl"
+
+    - name: Upload docker compose file
+      copy:
+        src: ../../deploy/docker-compose.prod.yml
+        dest: "{{ deploy_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Upload env file
+      copy:
+        dest: "{{ deploy_dir }}/.env"
+        mode: "0600"
+        content: |
+          BACKEND_IMAGE={{ backend_image }}
+          MYSQL_ROOT_PASSWORD={{ mysql_root_password }}
+          JWT_SECRET={{ jwt_secret }}
+          AMAP_API_KEY={{ amap_api_key }}
+
+    - name: Login to GHCR
+      command: docker login ghcr.io -u {{ ghcr_username }} --password-stdin
+      args:
+        stdin: "{{ ghcr_token }}"
+
+    - name: Pull images
+      command: docker compose pull
+      args:
+        chdir: "{{ deploy_dir }}"
+
+    - name: Start services
+      command: docker compose up -d
+      args:
+        chdir: "{{ deploy_dir }}"
+
+    - name: Show running containers
+      command: docker compose ps
+      args:
+        chdir: "{{ deploy_dir }}"
