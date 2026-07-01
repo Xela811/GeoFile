@@ -1,0 +1,57 @@
+services:
+  geofile-mysql:
+    image: mysql:8.0
+    container_name: geofile-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: geofile
+      TZ: Asia/Shanghai
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+
+  geofile-redis:
+    image: redis:7.0-alpine
+    container_name: geofile-redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./redis/data:/data
+
+  geofile-backend:
+    image: ${BACKEND_IMAGE}
+    container_name: geofile-backend
+    restart: always
+    depends_on:
+      - geofile-mysql
+      - geofile-redis
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://geofile-mysql:3306/geofile?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      SPRING_REDIS_HOST: geofile-redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD:
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      amap_api_key: ${AMAP_API_KEY}
+      FILE_UPLOAD_PATH: /app/uploads
+    volumes:
+      - ./uploads:/app/uploads
+      - ./backend/logs:/app/logs
+
+  geofile-nginx:
+    image: nginx:alpine
+    container_name: geofile-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - geofile-backend
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/html:/usr/share/nginx/html
