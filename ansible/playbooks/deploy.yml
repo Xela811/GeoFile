@@ -28,6 +28,12 @@
         dest: "{{ deploy_dir }}/docker-compose.yml"
         mode: "0644"
 
+    - name: Upload frontend dist
+      copy:
+        src: ../../frontend/dist/
+        dest: "{{ deploy_dir }}/nginx/html/"
+        mode: "0644"
+
     - name: Upload env file
       copy:
         dest: "{{ deploy_dir }}/.env"
