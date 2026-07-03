@@ -3,7 +3,7 @@
   become: true
 
   vars:
-    deploy_dir: /opt/geofile-deploy
+    deploy_dir: /root/geofile-deploy
 
   tasks:
     - name: Create deploy directories
