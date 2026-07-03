@@ -31,7 +31,7 @@
     - name: Upload frontend dist
       copy:
         src: ../../frontend/dist/
-        dest: "{{ deploy_dir }}/nginx/html/"
+        dest: "{{ deploy_dir }}/nginx/html/dist/"
         mode: "0644"
 
     - name: Upload env file
